@@ -11,7 +11,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from . import database as db
 
-APP_VERSION = "0.3.0"
+APP_VERSION = "0.4.0"
 URL = re.compile(r"https?://[^\s<>\"']+")
 SECRET = re.compile(r"(?i)(authorization|cookie|password|token|api[_-]?key|secret)(\s*[:=]\s*)([^\s,;]+)")
 
@@ -64,7 +64,7 @@ async def bundle():
     events = await db.list_events(limit=5000)
     jobs = await db.list_jobs(limit=30)
     summary = {
-        "application": "Public Data Monitor", "version": APP_VERSION,
+        "application": "Paralegal Research Desk", "version": APP_VERSION,
         "created_at": db.utcnow(), "python": platform.python_version(),
         "platform": platform.system(), "counts": await db.stats(),
         "recent_jobs": [{k: v for k, v in job.items() if k not in {"source_name", "message"}} for job in jobs],

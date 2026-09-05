@@ -129,6 +129,12 @@ def _sync_init_db() -> None:
         record_columns = {r["name"] for r in conn.execute("PRAGMA table_info(records)")}
         if "inactive_since" not in record_columns:
             conn.execute("ALTER TABLE records ADD COLUMN inactive_since TEXT")
+        for field in ("owner", "location", "osha_details"):
+            if field not in record_columns:
+                conn.execute(f"ALTER TABLE records ADD COLUMN {field} TEXT NOT NULL DEFAULT ''")
+        if "osha_status" not in record_columns:
+            conn.execute("ALTER TABLE records ADD COLUMN osha_status TEXT NOT NULL DEFAULT 'unknown'")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_records_osha ON records(osha_status)")
         conn.execute("""CREATE TABLE IF NOT EXISTS page_records (
             source_id INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
             url TEXT NOT NULL,
@@ -152,6 +158,16 @@ def _sync_init_db() -> None:
                              (entity_key(payload), record_hash(payload), row["id"]))
             conn.execute("UPDATE pages SET content_hash=NULL, etag=NULL, last_modified=NULL")
             conn.execute("PRAGMA user_version=2")
+        if version < 3:
+            # New research fields have neutral defaults. Recompute fingerprints
+            # without creating false change history or relabeling old people as
+            # owners. Fetch pages again so explicitly labeled fields can be read.
+            for row in conn.execute("SELECT * FROM records").fetchall():
+                payload = dict(row)
+                payload["extra"] = json.loads(payload["extra_json"] or "{}")
+                conn.execute("UPDATE records SET content_hash=? WHERE id=?", (record_hash(payload), row["id"]))
+            conn.execute("UPDATE pages SET content_hash=NULL, etag=NULL, last_modified=NULL")
+            conn.execute("PRAGMA user_version=3")
         conn.commit()
 
 
@@ -321,9 +337,10 @@ def _sync_upsert_record(source_id: int, record: dict[str, Any]) -> str:
         if not existing:
             cur = conn.execute(
                 """INSERT INTO records
-                (source_id,entity_key,content_hash,name,company,phone,address,date,external_id,source_url,extra_json,first_seen,last_seen,last_changed,active)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)""",
-                (source_id, key, digest, normalized["name"], normalized["company"], normalized["phone"], normalized["address"],
+                (source_id,entity_key,content_hash,name,company,owner,phone,address,location,osha_status,osha_details,date,external_id,source_url,extra_json,first_seen,last_seen,last_changed,active)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)""",
+                (source_id, key, digest, normalized["name"], normalized["company"], normalized["owner"], normalized["phone"], normalized["address"],
+                 normalized["location"], normalized["osha_status"], normalized["osha_details"],
                  normalized["date"], normalized["external_id"], normalized["source_url"], json.dumps(normalized["extra"], ensure_ascii=False), now, now, now),
             )
             conn.execute(
@@ -334,13 +351,15 @@ def _sync_upsert_record(source_id: int, record: dict[str, Any]) -> str:
             return "new"
         if existing["content_hash"] != digest:
             old_payload = json.dumps({
-                "name": existing["name"], "company": existing["company"], "phone": existing["phone"],
+                "name": existing["name"], "company": existing["company"], "owner": existing["owner"], "phone": existing["phone"],
                 "address": existing["address"], "date": existing["date"], "external_id": existing["external_id"],
+                "location": existing["location"], "osha_status": existing["osha_status"], "osha_details": existing["osha_details"],
                 "source_url": existing["source_url"], "extra": json.loads(existing["extra_json"] or "{}"),
             }, ensure_ascii=False, sort_keys=True)
             conn.execute(
-                """UPDATE records SET content_hash=?,name=?,company=?,phone=?,address=?,date=?,external_id=?,source_url=?,extra_json=?,last_seen=?,last_changed=?,active=1,inactive_since=NULL WHERE id=?""",
-                (digest, normalized["name"], normalized["company"], normalized["phone"], normalized["address"], normalized["date"],
+                """UPDATE records SET content_hash=?,name=?,company=?,owner=?,phone=?,address=?,location=?,osha_status=?,osha_details=?,date=?,external_id=?,source_url=?,extra_json=?,last_seen=?,last_changed=?,active=1,inactive_since=NULL WHERE id=?""",
+                (digest, normalized["name"], normalized["company"], normalized["owner"], normalized["phone"], normalized["address"],
+                 normalized["location"], normalized["osha_status"], normalized["osha_details"], normalized["date"],
                  normalized["external_id"], normalized["source_url"], json.dumps(normalized["extra"], ensure_ascii=False), now, now, existing["id"]),
             )
             conn.execute(
@@ -354,16 +373,26 @@ def _sync_upsert_record(source_id: int, record: dict[str, Any]) -> str:
         return "unchanged"
 
 
-def _sync_search_records(q: str = "", source_id: int | None = None, limit: int = 100, offset: int = 0) -> dict[str, Any]:
+def _sync_search_records(q: str = "", source_id: int | None = None, limit: int = 100, offset: int = 0,
+                         field: str = "all", osha_status: str | None = None) -> dict[str, Any]:
+    search_fields = {"all": ("name", "company", "owner", "phone", "address", "location", "date", "source_url", "external_id", "osha_details"),
+                     **{name: (name,) for name in ("name", "company", "owner", "address", "location")}}
+    if field not in search_fields:
+        raise ValueError("Unknown research search field")
+    if osha_status is not None and osha_status not in {"unknown", "open", "closed", "none_reported"}:
+        raise ValueError("Unknown OSHA status filter")
     clauses = ["1=1"]
     params: list[Any] = []
     if source_id:
         clauses.append("r.source_id=?")
         params.append(source_id)
+    if osha_status is not None:
+        clauses.append("r.osha_status=?")
+        params.append(osha_status)
     if q:
         like = "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
-        clauses.append("(r.name LIKE ? ESCAPE '\\' OR r.company LIKE ? ESCAPE '\\' OR r.phone LIKE ? ESCAPE '\\' OR r.address LIKE ? ESCAPE '\\' OR r.date LIKE ? ESCAPE '\\' OR r.source_url LIKE ? ESCAPE '\\' OR r.external_id LIKE ? ESCAPE '\\')")
-        params.extend([like] * 7)
+        clauses.append("(" + " OR ".join(f"r.{column} LIKE ? ESCAPE '\\'" for column in search_fields[field]) + ")")
+        params.extend([like] * len(search_fields[field]))
     where = " AND ".join(clauses)
     with closing(connect()) as conn:
         total = conn.execute(f"SELECT COUNT(*) c FROM records r WHERE {where}", params).fetchone()["c"]
@@ -375,11 +404,19 @@ def _sync_search_records(q: str = "", source_id: int | None = None, limit: int =
         return {"total": total, "items": [dict(r) for r in rows]}
 
 
-def _sync_all_records_for_export(q: str = "", source_id: int | None = None) -> list[dict[str, Any]]:
-    result = _sync_search_records(q=q, source_id=source_id, limit=250000, offset=0)
+def _sync_all_records_for_export(q: str = "", source_id: int | None = None, field: str = "all",
+                                 osha_status: str | None = None) -> list[dict[str, Any]]:
+    result = _sync_search_records(q=q, source_id=source_id, limit=250000, offset=0, field=field, osha_status=osha_status)
     if result["total"] > len(result["items"]):
         raise ValueError("Export exceeds 250000 records; narrow the search or source filter")
     return result["items"]
+
+
+def _sync_get_record(record_id: int) -> dict[str, Any] | None:
+    with closing(connect()) as conn:
+        row = conn.execute("""SELECT r.*, s.name AS source_name FROM records r
+            JOIN sources s ON s.id=r.source_id WHERE r.id=?""", (record_id,)).fetchone()
+        return dict(row) if row else None
 
 
 def _sync_record_history(record_id: int) -> list[dict[str, Any]]:
@@ -492,6 +529,7 @@ get_page = _async_database(_sync_get_page)
 upsert_page = _async_database(_sync_upsert_page)
 upsert_record = _async_database(_sync_upsert_record)
 search_records = _async_database(_sync_search_records)
+get_record = _async_database(_sync_get_record)
 all_records_for_export = _async_database(_sync_all_records_for_export)
 record_history = _async_database(_sync_record_history)
 stats = _async_database(_sync_stats)

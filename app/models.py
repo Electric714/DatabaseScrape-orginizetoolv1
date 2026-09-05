@@ -1,6 +1,9 @@
 from typing import Literal
 from pydantic import BaseModel, Field, HttpUrl
 
+ResearchField = Literal["all", "name", "company", "owner", "address", "location"]
+OshaStatus = Literal["unknown", "open", "closed", "none_reported"]
+
 
 class SourceCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)

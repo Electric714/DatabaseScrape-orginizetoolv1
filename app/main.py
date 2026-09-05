@@ -23,7 +23,7 @@ from .config import BASE_DIR
 from .crawler import CrawlEngine, canonicalize_url
 from .security import validate_public_url
 from .runtime import single_instance
-from .models import ScanOptions, SourceCreate, SourceUpdate
+from .models import OshaStatus, ResearchField, ScanOptions, SourceCreate, SourceUpdate
 
 TASKS: dict[int, asyncio.Task] = {}
 SCHEDULER_TASK: asyncio.Task | None = None
@@ -91,7 +91,7 @@ async def lifespan(_app: FastAPI):
     with single_instance():
         await db.init_db()
         activity.install()
-        activity.emit("INFO", "Workspace started. Ready to monitor public sources.", version=activity.APP_VERSION)
+        activity.emit("INFO", "Paralegal Research Desk started. Ready to collect public business records.", version=activity.APP_VERSION)
         await db.mark_interrupted_jobs()
         SCHEDULER_TASK = asyncio.create_task(scheduler_loop(), name="source-scheduler")
         try:
@@ -109,7 +109,7 @@ async def lifespan(_app: FastAPI):
 
 
 
-app = FastAPI(title="Public Data Monitor", version=activity.APP_VERSION, lifespan=lifespan)
+app = FastAPI(title="Paralegal Research Desk", version=activity.APP_VERSION, lifespan=lifespan)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "[::1]", "testserver"])
 
 
@@ -246,10 +246,21 @@ async def job(job_id: int):
 async def records(
     q: str = "",
     source_id: int | None = None,
+    field: ResearchField = "all",
+    osha_status: OshaStatus | None = None,
     limit: int = Query(default=100, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
 ):
-    return await db.search_records(q=q.strip(), source_id=source_id, limit=limit, offset=offset)
+    return await db.search_records(q=q.strip(), source_id=source_id, limit=limit, offset=offset,
+                                   field=field, osha_status=osha_status)
+
+
+@app.get("/api/records/{record_id}")
+async def record_details(record_id: int):
+    record = await db.get_record(record_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Research record not found")
+    return record
 
 
 @app.get("/api/records/{record_id}/history")
@@ -258,12 +269,13 @@ async def history(record_id: int):
 
 
 @app.get("/api/export")
-async def export_records(format: str = "csv", q: str = "", source_id: int | None = None):
+async def export_records(format: str = "csv", q: str = "", source_id: int | None = None,
+                         field: ResearchField = "all", osha_status: OshaStatus | None = None):
     fmt = format.lower()
     if fmt not in {"csv", "xlsx", "json"}:
         raise HTTPException(status_code=400, detail="format must be csv, xlsx, or json")
     try:
-        records = await db.all_records_for_export(q=q.strip(), source_id=source_id)
+        records = await db.all_records_for_export(q=q.strip(), source_id=source_id, field=field, osha_status=osha_status)
     except ValueError as exc:
         raise HTTPException(status_code=413, detail=str(exc)) from exc
     return await asyncio.to_thread(build_export, fmt, records)
@@ -271,7 +283,7 @@ async def export_records(format: str = "csv", q: str = "", source_id: int | None
 
 def build_export(fmt, records):
     columns = [
-        "id", "source_name", "name", "company", "phone", "address", "date", "external_id",
+        "id", "source_name", "name", "company", "owner", "phone", "address", "location", "osha_status", "osha_details", "date", "external_id",
         "source_url", "first_seen", "last_seen", "last_changed", "active", "inactive_since", "extra_json",
     ]
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")

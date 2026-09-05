@@ -23,10 +23,14 @@ ADDRESS_RE = re.compile(
 )
 
 FIELD_ALIASES = {
-    "name": {"name", "full name", "person", "contact", "owner", "member", "attorney"},
-    "company": {"company", "business", "organization", "organisation", "employer", "firm"},
+    "name": {"name", "full name", "person", "person name", "contact", "contact name", "member", "attorney"},
+    "company": {"company", "company name", "business", "business name", "legal business name", "organization", "organisation", "employer", "firm"},
+    "owner": {"owner", "owner name", "business owner", "business owner name", "name of owner"},
     "phone": {"phone", "telephone", "tel", "mobile", "cell"},
-    "address": {"address", "street address", "mailing address", "location"},
+    "address": {"address", "street address", "mailing address", "business address", "physical address"},
+    "location": {"location", "business location", "city", "city/state", "city / state", "city, state"},
+    "osha_status": {"osha status", "osha violation status", "osha violations status"},
+    "osha_details": {"osha violations", "open osha violations", "osha details", "osha violation details", "osha findings"},
     "date": {"date", "updated", "update date", "filed", "filed date", "record date", "created"},
     "external_id": {"id", "record id", "case id", "license id", "number", "record number"},
 }
@@ -66,9 +70,18 @@ def _address_from_jsonld(value: Any) -> str:
 
 
 def _record_has_signal(record: dict[str, Any]) -> bool:
-    return bool(record.get("name") or record.get("company")) and bool(
+    return bool(record.get("name") or record.get("company") or record.get("owner")) and bool(
         record.get("phone") or record.get("address") or record.get("date") or record.get("external_id")
+        or record.get("location") or record.get("osha_status") or record.get("osha_details")
+        or (record.get("company") and record.get("owner"))
     )
+
+
+def _assign_labeled(record: dict[str, Any], field: str, value: str) -> None:
+    value = clean_text(value)
+    record[field] = value
+    if field == "osha_status":
+        record["extra"]["osha_status_raw"] = value
 
 
 def extract_jsonld(soup: BeautifulSoup, page_url: str) -> list[dict[str, Any]]:
@@ -126,7 +139,7 @@ def extract_tables(soup: BeautifulSoup, page_url: str) -> list[dict[str, Any]]:
             record: dict[str, Any] = {"source_url": page_url, "extra": {}}
             for idx, cell in enumerate(cells):
                 if idx < len(mapped) and mapped[idx]:
-                    record[mapped[idx]] = clean_text(cell.get_text(" ", strip=True))
+                    _assign_labeled(record, mapped[idx], cell.get_text(" ", strip=True))
             link = row.find("a", href=True)
             if link:
                 record["source_url"] = urljoin(page_url, link["href"])
@@ -145,7 +158,7 @@ def extract_definition_lists(soup: BeautifulSoup, page_url: str) -> list[dict[st
                 continue
             field = _field_for_header(dt.get_text(" ", strip=True))
             if field:
-                record[field] = clean_text(dd.get_text(" ", strip=True))
+                _assign_labeled(record, field, dd.get_text(" ", strip=True))
         if _record_has_signal(record):
             records.append(record)
     return records
@@ -164,9 +177,19 @@ def extract_labeled_blocks(soup: BeautifulSoup, page_url: str) -> list[dict[str,
             label = clean_text(element.get_text(" ", strip=True)).rstrip(":")
             field = _field_for_header(label)
             if field:
-                sibling = element.find_next_sibling()
-                if sibling:
-                    record[field] = clean_text(sibling.get_text(" ", strip=True))
+                if isinstance(element.next_sibling, str) and clean_text(element.next_sibling).lstrip(": "):
+                    _assign_labeled(record, field, str(element.next_sibling).lstrip(": "))
+                else:
+                    sibling = element.find_next_sibling()
+                    if sibling:
+                        _assign_labeled(record, field, sibling.get_text(" ", strip=True))
+            elif ":" in label and not element.find(["div", "p", "dl", "table", "strong", "b", "span", "dt", "th"]):
+                # A single labeled line such as "Business name: Example LLC".
+                # Do not parse a whole card as one field or treat prose as status.
+                inline_label, value = label.split(":", 1)
+                field = _field_for_header(inline_label)
+                if field:
+                    _assign_labeled(record, field, value)
         phone = PHONE_RE.search(text)
         address = ADDRESS_RE.search(text)
         date = DATE_RE.search(text)
@@ -227,6 +250,7 @@ def extract_records(html: str, page_url: str) -> list[dict[str, Any]]:
     # Preserve stronger JSON-LD/table results when overlapping card heuristics agree.
     unique = {}
     for record in records:
+        record["extra"]["collected_from_url"] = page_url
         record["source_url"] = safe_link(page_url, record.get("source_url", page_url))
         normalized = canonical_record(record)
         unique.setdefault(entity_key(normalized), normalized)

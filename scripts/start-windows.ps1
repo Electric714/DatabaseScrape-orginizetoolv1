@@ -22,7 +22,7 @@ Start-Transcript -LiteralPath $setupLog -Append | Out-Null
 $code = 0
 try {
     Write-Host ''
-    Write-Host '  PUBLIC DATA MONITOR' -ForegroundColor Cyan
+    Write-Host '  PARALEGAL RESEARCH DESK' -ForegroundColor Cyan
     Write-Host '  Your workspace, ready in a few steps.' -ForegroundColor Gray
     Write-Host ''
     $env:UV_CACHE_DIR = Join-Path $runtime 'cache'
@@ -120,3 +120,4 @@ try {
     Stop-Transcript | Out-Null
 }
 exit $code
+

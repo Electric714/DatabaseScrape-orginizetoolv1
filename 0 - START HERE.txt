@@ -1,4 +1,4 @@
-PUBLIC DATA MONITOR
+PARALEGAL RESEARCH DESK
 ===================
 
 WINDOWS: OPEN THIS FIRST
@@ -9,16 +9,23 @@ WINDOWS: OPEN THIS FIRST
 
 2. Double-click:
 
-       1 - START Public Data Monitor.cmd
+       1 - START Paralegal Research Desk.cmd
 
 3. Wait for first-time setup. It downloads a private Python environment,
    the required packages and Chromium. This can take several minutes.
    You do not need to install Python or edit requirements.txt.
    Internet access is required for setup.
 
-4. Your browser opens the app automatically. Add a source and start a scan.
+4. Your browser opens the Paralegal Research Desk automatically.
    Keep the launcher window open while using the app.
    Press Ctrl+C in that window to stop the app safely.
+
+RESEARCH WORKFLOW
+Set up the six research websites when their names and URLs are available.
+Choose Collect records to save source information into the local database.
+Search business names, people, owners, locations and addresses in saved records.
+Review source-reported OSHA findings and open the original source for context.
+Export matching records for your research. Missing OSHA data means unknown.
 
 NEXT TIME
 Double-click the same START file. Completed setup is reused.
@@ -45,3 +52,5 @@ Company-managed PCs may require IT to allow the downloads/scripts.
 Do not disable antivirus or organization security policies.
 For macOS/Linux, see README.md.
 Keep the full extracted folder together. Back up data before upgrading.
+
+

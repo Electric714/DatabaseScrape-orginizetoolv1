@@ -1,7 +1,7 @@
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const safeUrl = value => { try { const u = new URL(value); return ['http:', 'https:'].includes(u.protocol) ? u.href : '#'; } catch { return '#'; } };
-const state = {sources: [], sourceSignature: '', jobsSignature: '', events: [], cursor: 0, paused: false, follow: true, level: 'all', offset: 0, total: 0, refreshing: false, online: null, deleteId: null, recordSequence: 0};
+const state = {sources: [], sourceSignature: '', jobsSignature: '', events: [], cursor: 0, paused: false, follow: true, level: 'all', offset: 0, total: 0, refreshing: false, online: null, deleteId: null, recordSequence: 0, detailSequence: 0, batchUpdating: false, editingId: null};
 const PAGE_SIZE = 50;
 let toastTimer;
 
@@ -27,7 +27,7 @@ async function api(path, options = {}) {
   return response.status === 204 ? null : response.json();
 }
 function humanDate(value, short = false) {
-  if (!value) return 'Not scanned yet';
+  if (!value) return 'Not collected yet';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return short ? date.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : date.toLocaleString([], {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'});
@@ -40,51 +40,94 @@ function setOnline(online) {
   $('health').className = 'connection' + (online ? '' : ' offline');
   $('health').innerHTML = '<i></i><span>' + (online ? 'Workspace online' : 'Reconnecting') + '</span>';
 }
+function isCollecting(source) { return ['queued', 'running'].includes(source.last_status); }
+function updateCollectionButton() {
+  const available = state.sources.filter(s => !isCollecting(s)).length;
+  $('updateSites').disabled = state.batchUpdating || available === 0;
+  $('updateSites').textContent = state.batchUpdating ? 'Queuing collections…' : 'Update configured sites';
+  $('updateSites').title = available ? 'Collect updated records from ' + available + ' available research sites' : (state.sources.length ? 'All configured sites are already collecting' : 'Set up a research site first');
+}
 async function loadSources() {
   const sources = await api('/api/sources');
   state.sources = sources;
-  $('sourceCount').textContent = sources.length;
-  $('navSources').textContent = sources.length;
+  $('sourceCount').textContent = sources.length < 6 ? sources.length + ' / 6' : sources.length + ' configured';
+  $('navSources').textContent = sources.length < 6 ? sources.length + '/6' : sources.length;
+  $('sitesHint').textContent = sources.length < 6 ? (6 - sources.length) + ' site' + (sources.length === 5 ? '' : 's') + ' awaiting setup' : 'Ready for collection and source review';
+  $('siteSetupNote').textContent = sources.length < 6 ? 'Six research sites are planned. Their names and addresses will be filled in when available.' : 'Collect from each site, then search its saved records above.';
+  updateCollectionButton();
   const signature = JSON.stringify(sources);
   if (signature === state.sourceSignature) return;
   state.sourceSignature = signature;
   const selection = $('sourceFilter').value;
-  $('sourceFilter').innerHTML = '<option value="">All sources</option>' + sources.map(s => '<option value="' + s.id + '">' + esc(s.name) + '</option>').join('');
+  $('sourceFilter').innerHTML = '<option value="">All research sites</option>' + sources.map(s => '<option value="' + s.id + '">' + esc(s.name) + '</option>').join('');
   $('sourceFilter').value = sources.some(s => String(s.id) === selection) ? selection : '';
-  if (!sources.length) {
-    $('sources').innerHTML = '<div class="empty-state"><div class="empty-orb">◎</div><h3>Your next discovery starts here.</h3><p>Connect a public website to begin collecting<br>and following the information that matters.</p><button class="button subtle small" data-open-source>＋ Add your first website</button></div>';
-    return;
-  }
-  $('sources').innerHTML = '<div class="source-list">' + sources.map(s => {
-    const running = ['queued','running'].includes(s.last_status);
-    return '<article class="source-row"><div class="source-avatar">' + esc(s.name.charAt(0).toUpperCase()) + '</div><div class="source-info"><h3>' + esc(s.name) + '</h3><a class="source-url" href="' + esc(safeUrl(s.start_url)) + '" target="_blank" rel="noreferrer">' + esc(s.start_url) + '</a><div class="source-details"><span class="tag ' + esc(s.last_status || '') + '">' + esc(s.last_status || 'Ready') + '</span><span>' + (s.auto_scan ? 'Every ' + s.interval_minutes + ' min' : 'Manual') + '</span><span>· ' + esc(humanDate(s.last_scan_at)) + '</span></div></div><div class="source-controls"><button class="scan-button" data-scan="' + s.id + '"' + (running ? ' disabled' : '') + '>' + (running ? 'Scanning…' : 'Scan') + '</button><button class="icon-button" data-full="' + s.id + '" aria-label="Full scan of ' + esc(s.name) + '" title="Full scan: ignore cached pages"' + (running ? ' disabled' : '') + '>↻</button><button class="icon-button" data-delete="' + s.id + '" aria-label="Delete ' + esc(s.name) + '" title="Remove source"' + (running ? ' disabled' : '') + '>×</button></div></article>';
-  }).join('') + '</div>';
+  const configured = sources.map((s, index) => {
+    const running = isCollecting(s);
+    return '<article class="source-row"><div class="source-avatar" aria-hidden="true">' + (index + 1) + '</div><div class="source-info"><h3>' + esc(s.name) + '</h3><a class="source-url" href="' + esc(safeUrl(s.start_url)) + '" target="_blank" rel="noreferrer">' + esc(s.start_url) + '</a><div class="source-details"><span class="tag ' + esc(s.last_status || '') + '">' + esc(s.last_status || 'Ready to collect') + '</span><span>' + (s.auto_scan ? 'Every ' + s.interval_minutes + ' min' : 'Manual collection') + '</span><span>· ' + esc(humanDate(s.last_scan_at)) + '</span></div></div><div class="source-controls"><button class="scan-button" data-scan="' + s.id + '"' + (running ? ' disabled' : '') + '>' + (running ? 'Collecting…' : 'Collect records') + '</button><button class="settings-button" data-edit="' + s.id + '">Edit settings</button><button class="icon-button" data-full="' + s.id + '" aria-label="Recollect all pages from ' + esc(s.name) + '" title="Recollect all pages, ignoring cached pages"' + (running ? ' disabled' : '') + '>↻</button><button class="icon-button" data-delete="' + s.id + '" aria-label="Delete ' + esc(s.name) + '" title="Remove research site"' + (running ? ' disabled' : '') + '>×</button></div></article>';
+  }).join('');
+  const pending = Array.from({length: Math.max(0, 6 - sources.length)}, (_, index) => {
+    const number = sources.length + index + 1;
+    return '<article class="pending-site"><span class="pending-number" aria-hidden="true">' + number + '</span><div><h3>Research site ' + number + '</h3><p>Name and website address pending</p></div><button class="button subtle small" data-open-source="' + number + '">Set up site ' + number + '</button></article>';
+  }).join('');
+  $('sources').innerHTML = (configured ? '<div class="source-list">' + configured + '</div>' : '') + (pending ? '<div class="pending-sites">' + pending + '</div>' : '') + (sources.length >= 6 ? '<div class="additional-source"><button class="text-button" data-open-source>Add another research site</button></div>' : '');
 }
 async function loadStats() {
   const stats = await api('/api/stats');
   for (const [key, id] of [['sources','statSources'],['records','statRecords'],['changed_24h','statChanged'],['running_jobs','statRunning']]) $(id).textContent = stats[key].toLocaleString();
-  $('runningHint').textContent = stats.running_jobs ? 'Following the latest information' : 'Ready when you are';
+  $('runningHint').textContent = stats.running_jobs ? 'Saving information from research sites' : 'Ready to collect from configured sites';
 }
 async function loadJobs() {
   const jobs = await api('/api/jobs?limit=8');
   const signature = JSON.stringify(jobs);
   if (signature === state.jobsSignature) return;
   state.jobsSignature = signature;
-  $('jobs').innerHTML = jobs.length ? jobs.map(j => '<article class="job"><div class="job-head"><strong>' + esc(j.source_name) + '</strong><span class="tag ' + esc(j.status) + '">' + esc(j.status) + '</span></div><span class="job-time">' + esc(humanDate(j.started_at, true)) + '</span><p class="job-message">' + esc(j.message || 'Waiting to begin…') + '</p><div class="job-stats"><span><b>' + j.pages_processed + '/' + j.pages_discovered + '</b> pages</span><span><b>' + j.records_found + '</b> found</span><span><b>' + j.records_new + '</b> new</span><span><b>' + j.records_updated + '</b> updated</span><span><b>' + j.errors + '</b> errors</span></div></article>').join('') : '<div class="job"><p class="job-message">No scans yet. Choose Scan on a source when you’re ready.</p></div>';
+  $('jobs').innerHTML = jobs.length ? jobs.map(j => '<article class="job"><div class="job-head"><strong>' + esc(j.source_name) + '</strong><span class="tag ' + esc(j.status) + '">' + esc(j.status) + '</span></div><span class="job-time">' + esc(humanDate(j.started_at, true)) + '</span><p class="job-message">' + esc(j.message || 'Waiting to begin…') + '</p><div class="job-stats"><span><b>' + j.pages_processed + '/' + j.pages_discovered + '</b> pages</span><span><b>' + j.records_found + '</b> found</span><span><b>' + j.records_new + '</b> new</span><span><b>' + j.records_updated + '</b> updated</span><span><b>' + j.errors + '</b> errors</span></div></article>').join('') : '<div class="job"><p class="job-message">No collections yet. Set up a research site, then choose Collect records.</p></div>';
+}
+function recordParams(extra = {}) {
+  const params = new URLSearchParams({...extra, q: $('search').value.trim(), field: $('fieldFilter').value});
+  if ($('sourceFilter').value) params.set('source_id', $('sourceFilter').value);
+  if ($('oshaFilter').value) params.set('osha_status', $('oshaFilter').value);
+  return params;
+}
+const OSHA_LABELS = {open: 'Open — source reported', closed: 'Closed — source reported', none_reported: 'None reported by source', unknown: 'Not reported / unknown'};
+function oshaBadge(record) {
+  const status = Object.hasOwn(OSHA_LABELS, record.osha_status) ? record.osha_status : 'unknown';
+  return '<span class="osha-badge ' + status + '">' + OSHA_LABELS[status] + '</span>';
 }
 async function loadRecords() {
   const sequence = ++state.recordSequence;
-  const params = new URLSearchParams({q: $('search').value.trim(), limit: PAGE_SIZE, offset: state.offset});
-  if ($('sourceFilter').value) params.set('source_id', $('sourceFilter').value);
+  const params = recordParams({limit: PAGE_SIZE, offset: state.offset});
   const data = await api('/api/records?' + params);
   if (sequence !== state.recordSequence) return;
   state.total = data.total;
   if (state.offset && state.offset >= data.total) { state.offset = 0; return loadRecords(); }
-  $('recordCount').textContent = data.total.toLocaleString() + ' records' + (params.get('q') || params.get('source_id') ? ' matching your filters.' : ', organized and ready to explore.');
-  $('pageInfo').textContent = data.total ? (state.offset + 1) + '–' + (state.offset + data.items.length) + ' of ' + data.total.toLocaleString() : 'No matching records';
+  const filtered = params.get('q') || params.get('source_id') || params.get('osha_status');
+  $('recordCount').textContent = data.total.toLocaleString() + ' saved records' + (filtered ? ' matching your filters.' : ' in your local research database.');
+  $('pageInfo').textContent = data.total ? (state.offset + 1) + '–' + (state.offset + data.items.length) + ' of ' + data.total.toLocaleString() : 'No matching saved records';
   $('prevPage').disabled = state.offset === 0;
   $('nextPage').disabled = state.offset + PAGE_SIZE >= data.total;
-  $('records').innerHTML = data.items.length ? data.items.map(r => '<tr><td><strong>' + esc(r.name || r.company || 'Unnamed record') + '</strong>' + (r.name && r.company ? '<small>' + esc(r.company) + '</small>' : '') + (!r.active ? '<span class="tag partial">Not seen recently</span>' : '') + '</td><td>' + esc(r.phone || '—') + '</td><td>' + esc(r.address || '—') + '</td><td>' + esc(r.date || '—') + '</td><td><a href="' + esc(safeUrl(r.source_url)) + '" target="_blank" rel="noreferrer">' + esc(r.source_name) + ' ↗</a></td><td>' + esc(humanDate(r.last_changed)) + '</td></tr>').join('') : '<tr><td colspan="6" class="table-empty">' + (params.get('q') ? 'No matches. Try a different name or keyword.' : 'Your collected records will appear here after a scan.') + '</td></tr>';
+  $('records').innerHTML = data.items.length ? data.items.map(r => '<tr><td><strong>' + esc(r.company || 'Not reported') + '</strong>' + (!r.active ? '<span class="tag partial">Not seen recently</span>' : '') + '</td><td>' + esc(r.name || 'Not reported') + '</td><td>' + esc(r.owner || 'Not reported') + '</td><td>' + esc(r.address || 'Not reported') + (r.location ? '<small>' + esc(r.location) + '</small>' : '') + '</td><td>' + oshaBadge(r) + '</td><td><a href="' + esc(safeUrl(r.source_url)) + '" target="_blank" rel="noreferrer">' + esc(r.source_name) + ' ↗</a><small>Collected ' + esc(humanDate(r.last_seen)) + '</small><button class="record-button" data-record="' + r.id + '" aria-label="View record: ' + esc(r.company || r.name || r.owner || 'record ' + r.id) + '">View record</button></td></tr>').join('') : '<tr><td colspan="6" class="table-empty"><strong>' + (filtered ? 'No saved records match these filters.' : 'Your local research database is ready.') + '</strong><p>' + (filtered ? 'Try another term or clear the filters. This search only checks records already collected.' : 'Set up a research site below and choose Collect records. Business, owner, address, and reported OSHA information will be organized here when available.') + '</p></td></tr>';
+}
+async function viewRecord(id) {
+  const sequence = ++state.detailSequence;
+  $('recordDialogTitle').textContent = 'Research record';
+  $('recordDetail').innerHTML = '<p class="detail-loading">Loading the saved record and its source…</p>';
+  $('recordDialog').showModal();
+  try {
+    const r = await api('/api/records/' + id);
+    if (sequence !== state.detailSequence) return;
+    $('recordDialogTitle').textContent = r.company || r.name || r.owner || 'Research record #' + id;
+    let extra = r.extra || {};
+    try { if (r.extra_json) extra = JSON.parse(r.extra_json); } catch {}
+    const collectedFrom = typeof extra.collected_from_url === 'string' ? extra.collected_from_url : '';
+    const field = (label, value) => '<div><dt>' + label + '</dt><dd>' + esc(value || 'Not reported') + '</dd></div>';
+    $('recordDetail').innerHTML = '<p class="detail-subtitle">Saved record #' + r.id + ' · ' + esc(r.source_name) + '</p>' +
+      '<dl class="record-fields">' + field('Business name', r.company) + field('Person / contact name', r.name) + field('Owner', r.owner) + field('Phone', r.phone) + field('Street address', r.address) + field('City / state / location', r.location) + field('Date reported by source', r.date) + field('Source record ID', r.external_id) + '</dl>' +
+      '<section class="record-osha"><h3>Reported OSHA information</h3>' + oshaBadge(r) + '<p>' + esc(r.osha_details || 'This record contains no additional OSHA details from its source.') + '</p><small>Unknown means the source did not provide a recognized status. “None reported” only reflects that source’s statement, not a complete OSHA clearance.</small></section>' +
+      '<section class="record-provenance"><h3>Source &amp; collection evidence</h3><a class="evidence-source" href="' + esc(safeUrl(r.source_url)) + '" target="_blank" rel="noreferrer">' + (collectedFrom && collectedFrom !== r.source_url ? 'Open record link' : 'Open collection page') + ' <span aria-hidden="true">↗</span><small>' + esc(r.source_url) + '</small></a>' + (collectedFrom && collectedFrom !== r.source_url ? '<a class="evidence-source secondary-evidence" href="' + esc(safeUrl(collectedFrom)) + '" target="_blank" rel="noreferrer">Collected from <span aria-hidden="true">↗</span><small>' + esc(collectedFrom) + '</small></a>' : '') + '<dl class="record-fields">' + field('First collected', r.first_seen ? humanDate(r.first_seen) : '') + field('Last collected', r.last_seen ? humanDate(r.last_seen) : '') + field('Last changed in local database', r.last_changed ? humanDate(r.last_changed) : '') + field('Collection presence', r.active ? 'Retained as present in saved records' : 'Not seen during a later complete collection') + '</dl><p class="detail-note">Presence describes collection history, not whether a business is legally active. Records from different sites remain separate so their evidence stays traceable.</p></section>';
+  } catch (error) {
+    if (sequence === state.detailSequence) $('recordDetail').innerHTML = '<p class="form-message">' + esc(error.message) + '</p>';
+  }
 }
 async function loadLogs() {
   if (state.paused) return;
@@ -110,7 +153,7 @@ function renderLogs() {
     const time = new Date(e.created_at).toLocaleTimeString([], {hour12:false});
     const details = Object.entries(e.details || {}).map(([k,v]) => k + ': ' + v).join(' · ');
     return '<div class="log-entry ' + esc(e.level) + '"><div class="log-line"><time class="log-time" title="' + esc(e.created_at) + '">' + esc(time) + '</time><span class="log-level">' + esc(e.level === 'WARNING' ? 'WARN' : e.level) + '</span>' + (e.job_id ? '<span class="log-job">scan #' + e.job_id + '</span>' : '') + '</div><div class="log-message">' + esc(e.message) + '</div>' + (details ? '<div class="log-context">' + esc(details) + '</div>' : '') + '</div>';
-  }).join('') : '<div class="console-empty"><span>›_</span><strong>' + (search || state.level !== 'all' ? 'Nothing here matches.' : 'Ready to listen.') + '</strong><p>' + (search || state.level !== 'all' ? 'Try another filter or search.' : 'Startup, scans, updates, and errors<br>appear here automatically.') + '</p></div>';
+  }).join('') : '<div class="console-empty"><span>›_</span><strong>' + (search || state.level !== 'all' ? 'Nothing here matches.' : 'Ready to collect.') + '</strong><p>' + (search || state.level !== 'all' ? 'Try another filter or search.' : 'Startup, scans, updates, and errors<br>appear here automatically.') + '</p></div>';
   feed.scrollTop = state.follow ? feed.scrollHeight : oldScroll;
 }
 async function refreshAll() {
@@ -128,18 +171,37 @@ async function refreshAll() {
     $('lastSync').textContent = 'Retrying connection…';
   } finally { state.refreshing = false; }
 }
-function openSource() { $('formMessage').textContent = ''; $('sourceDialog').showModal(); $('sourceName').focus(); }
+function openSource(slot, existing = null) {
+  state.editingId = existing?.id || null;
+  $('sourceForm').reset();
+  $('formMessage').textContent = '';
+  $('sourceUrl').readOnly = Boolean(existing);
+  $('saveSource').textContent = existing ? 'Save site settings' : 'Save research site';
+  $('sourceDialog').querySelector('.modal-intro').textContent = existing ? 'Update the name, schedule, or collection limits for this site. Its saved research records are preserved.' : 'Connect one of your public-record research websites. Records collected from it are saved locally.';
+  $('sourceSlotLabel').textContent = existing ? 'RESEARCH SITE / SETTINGS' : (slot ? 'RESEARCH SITE ' + slot + ' / SETUP' : 'SET UP A RESEARCH SITE');
+  $('sourceDialogTitle').textContent = existing ? 'Edit research site settings.' : (slot ? 'Set up research site ' + slot + '.' : 'Add a research site.');
+  if (existing) {
+    const fields = {sourceName:'name', sourceUrl:'start_url', maxPages:'max_pages', maxDepth:'max_depth', concurrency:'concurrency', delayMs:'delay_ms', renderMode:'render_mode', intervalMinutes:'interval_minutes'};
+    Object.entries(fields).forEach(([id, key]) => { $(id).value = existing[key]; });
+    $('autoScan').value = String(Boolean(existing.auto_scan));
+    $('respectRobots').value = String(Boolean(existing.respect_robots));
+  }
+  $('sourceDialog').querySelector('.advanced').open = Boolean(existing);
+  $('sourceDialog').showModal();
+  $('sourceName').focus();
+}
 async function addSource(event) {
   event.preventDefault();
   const button = $('saveSource');
   button.disabled = true;
-  $('formMessage').textContent = 'Checking this website…';
+  $('formMessage').textContent = state.editingId ? 'Saving collection settings…' : 'Checking this website…';
   try {
     const body = {name: $('sourceName').value.trim(), start_url: $('sourceUrl').value.trim(), auto_scan: $('autoScan').value === 'true', interval_minutes: +$('intervalMinutes').value, max_pages: +$('maxPages').value, max_depth: +$('maxDepth').value, concurrency: +$('concurrency').value, delay_ms: +$('delayMs').value, render_mode: $('renderMode').value, respect_robots: $('respectRobots').value === 'true'};
-    await api('/api/sources', {method:'POST', body: JSON.stringify(body)});
+    if (state.editingId) delete body.start_url;
+    await api(state.editingId ? '/api/sources/' + state.editingId : '/api/sources', {method:state.editingId ? 'PATCH' : 'POST', body: JSON.stringify(body)});
     $('sourceDialog').close();
     $('sourceForm').reset();
-    notify('Source added. You’re ready to start a scan.');
+    notify(state.editingId ? 'Site settings saved. Existing research records are preserved.' : 'Research site saved. Choose Collect records to add its data to your local database.');
     await refreshAll();
   } catch (error) { $('formMessage').textContent = error.message; localEvent('ERROR', 'Adding source failed: ' + error.message); }
   finally { button.disabled = false; }
@@ -147,9 +209,26 @@ async function addSource(event) {
 async function scan(id, full) {
   try {
     await api('/api/sources/' + id + '/scan', {method:'POST',body:JSON.stringify({force_full:full})});
-    notify(full ? 'Full scan queued. Follow its progress in the console.' : 'Scan queued. Follow its progress in the console.');
+    notify(full ? 'Full collection queued. Progress will appear in the console.' : 'Collection queued. Records will be saved to your local database.');
     await refreshAll();
   } catch (error) { notify(error.message, true); localEvent('ERROR', 'Could not start scan: ' + error.message); }
+}
+async function updateSites() {
+  if (state.batchUpdating) return;
+  const available = state.sources.filter(s => !isCollecting(s));
+  if (!available.length) return;
+  state.batchUpdating = true;
+  updateCollectionButton();
+  try {
+    const results = await Promise.allSettled(available.map(s => api('/api/sources/' + s.id + '/scan', {method:'POST', body: JSON.stringify({force_full: false})})));
+    const successful = results.filter(r => r.status === 'fulfilled').length;
+    results.forEach((result, index) => { if (result.status === 'rejected') localEvent('ERROR', 'Collection could not start for ' + available[index].name + ': ' + result.reason.message); });
+    notify(successful + ' site collection' + (successful === 1 ? '' : 's') + ' queued.' + (successful < results.length ? ' Check the console for sites that could not start.' : ' Saved records will update as collection proceeds.'), successful < results.length);
+    await refreshAll();
+  } finally {
+    state.batchUpdating = false;
+    updateCollectionButton();
+  }
 }
 async function removeSource() {
   const button = $('confirmDelete');
@@ -170,12 +249,11 @@ function saveBlob(blob, filename) {
 async function exportRecords(format, button) {
   button.disabled = true;
   try {
-    const params = new URLSearchParams({format, q:$('search').value.trim()});
-    if ($('sourceFilter').value) params.set('source_id', $('sourceFilter').value);
+    const params = recordParams({format});
     const response = await fetch('/api/export?' + params, {signal:AbortSignal.timeout(60000)});
     if (!response.ok) { const error = await response.json(); throw new Error(error.detail || 'Export failed'); }
-    saveBlob(await response.blob(), 'records-' + new Date().toISOString().slice(0,10) + '.' + format);
-    notify('Records exported.');
+    saveBlob(await response.blob(), 'research-records-' + new Date().toISOString().slice(0,10) + '.' + format);
+    notify('Matching research records exported with their source details.');
   } catch (error) { notify(error.message, true); localEvent('ERROR', 'Record export failed: ' + error.message); }
   finally { button.disabled = false; }
 }
@@ -184,11 +262,11 @@ async function exportLogs() {
   try {
     const response = await fetch('/api/activity/export', {signal:AbortSignal.timeout(15000)});
     if (!response.ok) throw new Error('Diagnostic export failed');
-    saveBlob(await response.blob(), 'public-data-monitor-diagnostics.zip');
+    saveBlob(await response.blob(), 'paralegal-research-diagnostics.zip');
     notify('Diagnostic report downloaded. Review it before sharing.');
     await loadLogs();
   } catch {
-    saveBlob(new Blob([JSON.stringify({note:'Backend unavailable. Browser-visible events only.',created_at:new Date().toISOString(),events:state.events}, null, 2)], {type:'application/json'}), 'public-data-monitor-offline-logs.json');
+    saveBlob(new Blob([JSON.stringify({note:'Backend unavailable. Browser-visible events only.',created_at:new Date().toISOString(),events:state.events}, null, 2)], {type:'application/json'}), 'paralegal-research-offline-logs.json');
     notify('Backend unavailable. Downloaded the activity visible in this browser instead.');
   } finally { $('exportLogs').disabled = false; }
 }
@@ -201,7 +279,9 @@ async function captureSnapshot() {
 document.addEventListener('click', event => {
   const button = event.target.closest('button');
   if (!button) return;
-  if (button.hasAttribute('data-open-source')) openSource();
+  if (button.hasAttribute('data-open-source')) openSource(button.dataset.openSource);
+  if (button.dataset.record) viewRecord(+button.dataset.record);
+  if (button.dataset.edit) openSource(null, state.sources.find(s => s.id === +button.dataset.edit));
   if (button.dataset.close) $(button.dataset.close).close();
   if (button.dataset.scan) scan(+button.dataset.scan, false);
   if (button.dataset.full) scan(+button.dataset.full, true);
@@ -223,9 +303,25 @@ $('confirmDelete').addEventListener('click', removeSource);
 $('refreshSources').addEventListener('click', refreshAll);
 $('helpButton').addEventListener('click', () => $('helpDialog').showModal());
 const search = () => { state.offset = 0; loadRecords().catch(e => notify(e.message,true)); };
-$('searchBtn').addEventListener('click', search);
-$('search').addEventListener('keydown', e => { if (e.key === 'Enter') search(); });
-$('sourceFilter').addEventListener('change', search);
+$('recordSearchForm').addEventListener('submit', event => { event.preventDefault(); search(); });
+['sourceFilter', 'fieldFilter', 'oshaFilter'].forEach(id => $(id).addEventListener('change', search));
+function clearFilters() {
+  $('search').value = '';
+  $('fieldFilter').value = 'all';
+  $('sourceFilter').value = '';
+  $('oshaFilter').value = '';
+}
+$('clearFilters').addEventListener('click', () => { clearFilters(); search(); $('search').focus(); });
+$('findRecords').addEventListener('click', () => { $('recordsSection').scrollIntoView({block:'start'}); $('search').focus({preventScroll:true}); });
+$('reviewOsha').addEventListener('click', () => {
+  clearFilters();
+  $('oshaFilter').value = 'open';
+  search();
+  $('recordsSection').scrollIntoView({block:'start'});
+  $('oshaFilter').focus({preventScroll:true});
+  notify('Showing saved records with an open OSHA status explicitly reported by their source.');
+});
+$('updateSites').addEventListener('click', updateSites);
 $('prevPage').addEventListener('click', () => { state.offset = Math.max(0, state.offset - PAGE_SIZE); loadRecords().catch(e => notify(e.message,true)); });
 $('nextPage').addEventListener('click', () => { state.offset += PAGE_SIZE; loadRecords().catch(e => notify(e.message,true)); });
 $('logSearch').addEventListener('input', renderLogs);

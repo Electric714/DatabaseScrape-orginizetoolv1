@@ -1,5 +1,19 @@
 # Interface and setup
 
+## Paralegal research workflow
+The desk now puts the local research database first. Six website positions are
+reserved until the actual source names and URLs are supplied. Collect records
+refreshes one configured source; Update configured sites queues their collectors.
+These actions save webpage records locally. They do not yet submit names to the
+six websites' search forms, nor extract text from PDFs.
+
+Search supports business, person, owner, street address, and location fields plus
+source and source-reported OSHA status filters. Filters also apply to exports.
+The record detail view retains raw OSHA wording, provenance links, timestamps,
+and collection presence. Unknown means the source did not provide a recognized status;
+it is never converted into a clean violation record. Old saved records remain
+available after the additive database update.
+
 The frontend uses only local assets: a mist background, teal navigation, rounded panels, an orbital illustration, and a dark activity console. It adapts to narrow screens and supports reduced motion and keyboard focus. Source removal requires confirmation; records are paginated in batches of 50.
 
 ## Logging
@@ -16,3 +30,4 @@ The runner binds only 127.0.0.1, checks ports 8000 through 8009, recognizes an e
 
 ## Verification
 Tests cover cursor persistence, retention, redaction, exception capture, desktop interactions, mobile overflow, filtering, pause/resume, snapshots, ZIP export, and disconnected JSON export. Existing crawler/security checks remain enabled. Windows setup is tested from a directory containing spaces, including reuse and repair while preserving data. macOS/Linux helpers and native ARM64 require platform-specific smoke testing.
+

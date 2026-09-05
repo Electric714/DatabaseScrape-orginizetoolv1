@@ -1,4 +1,9 @@
-# Database Scrape & Organize Tool
+# Paralegal Research Desk — technical reference
+
+The app supports a paralegal's six-site public-record research workflow: collect
+business/person/ownership details, locations and addresses, and source-reported
+OSHA findings into a searchable local database. The six site integrations await
+their actual names and URLs. See the main README for current user instructions.
 
 ## Audited foundation (September 2026)
 
@@ -33,7 +38,7 @@ It is not a universal exhaustive extractor or a production law-office deployment
   work. Rendering errors are surfaced.
 - CSV/XLSX text is formula-neutralized. Exports include structured extra data and
   inactive state. More than 250,000 matches returns an explicit error; narrow the
-  filter. The GUI shows up to 250 results; the API supports offset pagination.
+  filter. The GUI displays 50 results per page and supports pagination.
 
 Before upgrading an existing installation, stop the app and back up the SQLite
 database (including any WAL state using SQLite backup facilities). Startup migrates

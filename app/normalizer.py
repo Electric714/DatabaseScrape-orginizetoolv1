@@ -7,6 +7,16 @@ from typing import Any
 PHONE_DIGITS = re.compile(r"\D+")
 WHITESPACE = re.compile(r"\s+")
 
+# These are source-reported states, never an independent legal conclusion. Only
+# exact labels normalize; counts, narrative mentions, and missing data stay unknown.
+OSHA_STATUS_ALIASES = {
+    "unknown": "unknown", "open": "open", "closed": "closed",
+    "none_reported": "none_reported", "none reported": "none_reported",
+    "no violations reported": "none_reported",
+    "no open violations reported": "none_reported",
+    "no open osha violations reported": "none_reported",
+}
+
 
 def clean_text(value: Any) -> str:
     if value is None:
@@ -21,6 +31,10 @@ def normalize_phone(value: str) -> str:
     if len(digits) == 10:
         return f"{digits[:3]}-{digits[3:6]}-{digits[6:]}"
     return clean_text(value)
+
+
+def normalize_osha_status(value: Any) -> str:
+    return OSHA_STATUS_ALIASES.get(clean_text(value).casefold(), "unknown")
 
 
 def normalize_date(value: str) -> str:
@@ -40,11 +54,16 @@ def normalize_date(value: str) -> str:
 
 
 def canonical_record(record: dict[str, Any]) -> dict[str, Any]:
+    raw_status = clean_text(record.get("osha_status"))
     return {
         "name": clean_text(record.get("name")),
         "company": clean_text(record.get("company")),
+        "owner": clean_text(record.get("owner")),
         "phone": normalize_phone(clean_text(record.get("phone"))),
         "address": clean_text(record.get("address")),
+        "location": clean_text(record.get("location")),
+        "osha_status": normalize_osha_status(raw_status),
+        "osha_details": clean_text(record.get("osha_details")) or (raw_status if raw_status != "unknown" else ""),
         "date": normalize_date(clean_text(record.get("date"))),
         "external_id": clean_text(record.get("external_id")),
         "source_url": clean_text(record.get("source_url")),
@@ -58,6 +77,8 @@ def entity_key(record: dict[str, Any]) -> str:
         identity = f"id|{r['external_id']}"
     elif r["name"] or r["company"]:
         identity = json.dumps(["named", r["source_url"], r["name"].casefold(), r["company"].casefold()])
+    elif r["owner"]:
+        identity = json.dumps(["owner", r["source_url"], r["owner"].casefold()])
     elif r["address"]:
         identity = json.dumps(["address", r["source_url"], r["address"].casefold()])
     else:
@@ -68,6 +89,6 @@ def entity_key(record: dict[str, Any]) -> str:
 def record_hash(record: dict[str, Any]) -> str:
     payload = canonical_record(record)
     payload.pop("source_url", None)  # Provenance changes are not field changes.
-    payload["extra"] = {k: v for k, v in payload["extra"].items() if k not in {"raw_text", "extraction", "jsonld_type"}}
+    payload["extra"] = {k: v for k, v in payload["extra"].items() if k not in {"raw_text", "extraction", "jsonld_type", "collected_from_url"}}
     stable = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(stable.encode("utf-8")).hexdigest()

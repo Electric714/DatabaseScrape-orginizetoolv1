@@ -12,7 +12,17 @@ def test_live_gui_smoke(database, monkeypatch):
     from playwright.sync_api import sync_playwright
     from app import main
     from fixture_site import DirectorySite
-    site = DirectorySite()
+    class ResearchDirectorySite(DirectorySite):
+        def profile(self, identifier, name, phone):
+            # Synthetic research evidence, never a claim about a real business.
+            owner = "Sample Owner" if identifier == "P1" else "Other Owner"
+            status = "Open" if identifier == "P1" else ""
+            return ("<table><tr><th>Record ID</th><th>Person name</th><th>Business name</th>"
+                    "<th>Owner</th><th>Address</th><th>Location</th><th>OSHA status</th><th>OSHA violations</th></tr>"
+                    f"<tr><td>{identifier}</td><td>{name}</td><td>Example Builders {identifier}</td>"
+                    f"<td>{owner}</td><td>12 Oak Rd</td><td>Madison, WI</td><td>{status}</td>"
+                    "<td>Illustrative fixture only</td></tr></table>")
+    site = ResearchDirectorySite()
     class FixtureEngine(CrawlEngine):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs, transport=httpx.MockTransport(site))
@@ -39,19 +49,29 @@ def test_live_gui_smoke(database, monkeypatch):
                 errors = []
                 page.on("pageerror", lambda error: errors.append(str(error)))
                 page.goto(f"http://127.0.0.1:{port}")
-                page.get_by_role("button", name="Add a website", exact=True).click()
+                page.get_by_role("button", name="Set up site 1", exact=True).click()
                 page.locator("#sourceName").fill("GUI fixture")
                 page.locator("#sourceUrl").fill("https://fixture.test/")
                 page.locator("summary").click()
                 page.locator("#renderMode").select_option("http")
                 page.locator("#delayMs").fill("0")
-                page.get_by_role("button", name="Add source", exact=True).click()
-                page.get_by_role("button", name="Scan", exact=True).wait_for()
-                page.get_by_role("button", name="Scan", exact=True).click()
+                page.get_by_role("button", name="Save research site", exact=True).click()
+                page.get_by_role("button", name="Collect records", exact=True).wait_for()
+                page.get_by_role("button", name="Collect records", exact=True).click()
                 page.get_by_role("cell", name="Jane Doe", exact=True).wait_for(timeout=15000)
                 page.locator("#sourceFilter").select_option(label="GUI fixture")
                 page.wait_for_timeout(3500)
                 assert page.locator("#sourceFilter option:checked").inner_text() == "GUI fixture"
+                page.locator("#fieldFilter").select_option("owner")
+                page.locator("#search").fill("Sample Owner")
+                page.get_by_role("button", name="Search records", exact=True).click()
+                from playwright.sync_api import expect
+                expect(page.locator("#records tr")).to_have_count(1)
+                expect(page.locator("#records")).to_contain_text("Sample Owner")
+                page.get_by_role("button", name="View record: Example Builders P1", exact=True).click()
+                expect(page.locator("#recordDetail")).to_contain_text("Illustrative fixture only")
+                page.get_by_role("button", name="Close record", exact=True).click()
+                page.locator("#clearFilters").click()
                 from app import activity
                 from playwright.sync_api import expect
                 activity.emit("ERROR", "Fixture connection error", error="Demonstration of a failed page")
@@ -142,3 +162,4 @@ async def test_browser_internal_resource_blocked(source):
         assert all("127.0.0.1" not in url for url in requests)
     finally:
         await engine.renderer.close()
+
