@@ -7,6 +7,9 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -14,4 +17,9 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -r requirements.txt
+      - run: python -m playwright install --with-deps chromium
       - run: pytest -q
+        env:
+          RUN_BROWSER_TESTS: "1"
+      - run: pip install pip-audit==2.10.1
+      - run: pip-audit --progress-spinner off

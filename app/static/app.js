@@ -1,13 +1,14 @@
 const $ = (id) => document.getElementById(id);
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let sources = [];
+const safeUrl = (v) => { try { const u = new URL(v); return ['http:', 'https:'].includes(u.protocol) ? u.href : '#'; } catch (_) { return '#'; } };
 
 async function api(path, options = {}) {
-  const res = await fetch(path, {headers: {'Content-Type':'application/json', ...(options.headers || {})}, ...options});
+  const res = await fetch(path, {...options, headers: {'Content-Type':'application/json', ...(options.headers || {})}, signal: AbortSignal.timeout(30000)});
   if (!res.ok) {
     let detail = res.status + ' ' + res.statusText;
     try { detail = (await res.json()).detail || detail; } catch (_) {}
-    throw new Error(detail);
+    throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
   }
   if (res.status === 204) return null;
   return res.json();
@@ -35,14 +36,16 @@ async function loadStats() {
 async function loadSources() {
   sources = await api('/api/sources');
   const root = $('sources');
+  const selection = $('sourceFilter').value;
   $('sourceFilter').innerHTML = '<option value="">All sources</option>' + sources.map((s) => '<option value="' + s.id + '">' + esc(s.name) + '</option>').join('');
+  $('sourceFilter').value = sources.some(s => String(s.id) === selection) ? selection : '';
   if (!sources.length) { root.className = 'source-grid empty'; root.textContent = 'No sources yet.'; return; }
   root.className = 'source-grid';
   root.innerHTML = sources.map((s) =>
     '<div class="source-card">' +
       '<div class="source-top"><div><h3>' + esc(s.name) + '</h3><div class="url">' + esc(s.start_url) + '</div></div><span class="pill">' + (s.auto_scan ? 'AUTO' : 'MANUAL') + '</span></div>' +
       '<div class="source-meta"><div><span>Last scan</span><strong>' + esc(fmtDate(s.last_scan_at)) + '</strong></div><div><span>Last new</span><strong>' + (s.last_new ?? '—') + '</strong></div><div><span>Last updated</span><strong>' + (s.last_updated ?? '—') + '</strong></div></div>' +
-      '<div class="actions"><button class="primary" onclick="scan(' + s.id + ',false)">Scan</button><button class="ghost" onclick="scan(' + s.id + ',true)">Force full</button><button class="danger" onclick="removeSource(' + s.id + ')">Delete</button></div>' +
+      '<div class="actions"><button class="primary" data-scan="' + s.id + '">Scan</button><button class="ghost" data-full="' + s.id + '">Force full</button><button class="danger" data-delete="' + s.id + '">Delete</button></div>' +
     '</div>'
   ).join('');
 }
@@ -84,7 +87,7 @@ async function loadJobs() {
   if (!jobs.length) { root.className = 'jobs empty'; root.textContent = 'No crawl jobs yet.'; return; }
   root.className = 'jobs';
   root.innerHTML = jobs.map((j) =>
-    '<div class="job"><div><strong>' + esc(j.source_name) + '</strong><small class="status-' + esc(j.status) + '">' + esc(j.status) + ' · ' + esc(fmtDate(j.started_at)) + '</small></div>' +
+    '<div class="job"><div><strong>' + esc(j.source_name) + '</strong><small class="status-' + esc(j.status) + '">' + esc(j.status) + ' · ' + esc(fmtDate(j.started_at)) + '</small><small>' + esc(j.message || '') + '</small></div>' +
     '<span><small>Pages</small>' + j.pages_processed + '/' + j.pages_discovered + '</span>' +
     '<span><small>Found</small>' + j.records_found + '</span><span><small>New</small>' + j.records_new + '</span>' +
     '<span><small>Updated</small>' + j.records_updated + '</span><span><small>Errors</small>' + j.errors + '</span></div>'
@@ -96,12 +99,12 @@ async function loadRecords() {
   const sid = $('sourceFilter').value;
   const params = 'q=' + q + (sid ? '&source_id=' + sid : '') + '&limit=250';
   const data = await api('/api/records?' + params);
-  $('recordCount').textContent = data.total.toLocaleString() + ' matching records';
+  $('recordCount').textContent = data.total.toLocaleString() + ' matching records (showing up to 250; exports include all matches)';
   const root = $('records');
   if (!data.items.length) { root.innerHTML = '<tr><td colspan="7" class="muted">No matching records.</td></tr>'; return; }
   root.innerHTML = data.items.map((r) =>
     '<tr><td>' + esc(r.name || '—') + '</td><td>' + esc(r.company || '—') + '</td><td>' + esc(r.phone || '—') + '</td><td>' + esc(r.address || '—') + '</td><td>' + esc(r.date || '—') + '</td>' +
-    '<td><a href="' + esc(r.source_url) + '" target="_blank" rel="noreferrer">' + esc(r.source_name) + '</a></td><td>' + esc(fmtDate(r.last_changed)) + '</td></tr>'
+    '<td><a href="' + esc(safeUrl(r.source_url)) + '" target="_blank" rel="noreferrer">' + esc(r.source_name) + '</a></td><td>' + esc(fmtDate(r.last_changed)) + '</td></tr>'
   ).join('');
 }
 
@@ -111,11 +114,19 @@ function exportData(fmt) {
   window.location.href = '/api/export?format=' + fmt + '&q=' + q + (sid ? '&source_id=' + sid : '');
 }
 
-async function refreshAll() { await Promise.all([loadStats(), loadSources(), loadJobs(), loadRecords()]); }
+async function refreshAll() { try { await loadSources(); await Promise.all([checkHealth(), loadStats(), loadJobs(), loadRecords()]); } catch (e) { $('formMessage').textContent = e.message; } }
 $('sourceForm').addEventListener('submit', addSource);
 $('refreshSources').addEventListener('click', refreshAll);
 $('searchBtn').addEventListener('click', loadRecords);
 $('search').addEventListener('keydown', (e) => { if (e.key === 'Enter') loadRecords(); });
 $('sourceFilter').addEventListener('change', loadRecords);
 document.querySelectorAll('[data-export]').forEach((b) => b.addEventListener('click', () => exportData(b.dataset.export)));
-checkHealth(); refreshAll(); setInterval(() => { loadStats(); loadSources(); loadJobs(); }, 3000);
+$('sources').addEventListener('click', (event) => {
+  const b = event.target.closest('button');
+  if (!b) return;
+  if (b.dataset.scan) scan(+b.dataset.scan, false);
+  if (b.dataset.full) scan(+b.dataset.full, true);
+  if (b.dataset.delete) removeSource(+b.dataset.delete);
+});
+async function poll() { await refreshAll(); setTimeout(poll, 3000); }
+poll();

@@ -1,10 +1,11 @@
-fastapi==0.116.1
+fastapi==0.141.1
+starlette==1.6.0
 uvicorn[standard]==0.35.0
 httpx==0.28.1
 beautifulsoup4==4.13.4
-lxml==6.0.0
+lxml==6.1.0
 pydantic==2.11.7
 openpyxl==3.1.5
-playwright==1.54.0
-pytest==8.4.1
-pytest-asyncio==1.1.0
+playwright==1.62.0
+pytest==9.0.3
+pytest-asyncio==1.4.0

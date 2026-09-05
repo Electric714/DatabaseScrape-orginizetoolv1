@@ -6,5 +6,6 @@ __pycache__/
 .DS_Store
 data/*.db
 data/*.db-*
+data/*.lock
 exports/*
 !exports/.gitkeep

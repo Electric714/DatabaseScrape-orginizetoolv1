@@ -57,15 +57,17 @@ def entity_key(record: dict[str, Any]) -> str:
     if r["external_id"]:
         identity = f"id|{r['external_id']}"
     elif r["name"] or r["company"]:
-        identity = "|".join(["named", r["name"].lower(), r["company"].lower()])
+        identity = json.dumps(["named", r["source_url"], r["name"].casefold(), r["company"].casefold()])
     elif r["address"]:
-        identity = f"address|{r['address'].lower()}"
+        identity = json.dumps(["address", r["source_url"], r["address"].casefold()])
     else:
-        identity = f"url|{r['source_url'].lower()}"
+        identity = f"url|{r['source_url']}"
     return hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
 
 def record_hash(record: dict[str, Any]) -> str:
     payload = canonical_record(record)
+    payload.pop("source_url", None)  # Provenance changes are not field changes.
+    payload["extra"] = {k: v for k, v in payload["extra"].items() if k not in {"raw_text", "extraction", "jsonld_type"}}
     stable = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(stable.encode("utf-8")).hexdigest()

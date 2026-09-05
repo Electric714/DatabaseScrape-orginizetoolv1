@@ -2,6 +2,11 @@ import asyncio
 import csv
 import io
 import json
+import logging
+from urllib.parse import urlsplit
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
+from starlette.middleware.trustedhost import TrustedHostMiddleware
+from starlette.responses import JSONResponse
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone, timedelta
 
@@ -9,17 +14,26 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from openpyxl import Workbook
+from openpyxl.utils import get_column_letter
 
 from . import database as db
 from .config import BASE_DIR
-from .crawler import CrawlEngine
+from .crawler import CrawlEngine, canonicalize_url
+from .security import validate_public_url
+from .runtime import single_instance
 from .models import ScanOptions, SourceCreate, SourceUpdate
 
 TASKS: dict[int, asyncio.Task] = {}
 SCHEDULER_TASK: asyncio.Task | None = None
+SCAN_LOCK = asyncio.Lock()
 
 
 async def launch_scan(source_id: int, force_full: bool = False) -> dict:
+    async with SCAN_LOCK:
+        return await _launch_scan(source_id, force_full)
+
+
+async def _launch_scan(source_id: int, force_full: bool = False) -> dict:
     source = await db.get_source(source_id)
     if not source:
         raise HTTPException(status_code=404, detail="Source not found")
@@ -64,28 +78,47 @@ async def scheduler_loop():
                 if due:
                     await launch_scan(source["id"], force_full=False)
         except Exception:
-            pass
+            logging.exception("Scheduler iteration failed")
         await asyncio.sleep(30)
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     global SCHEDULER_TASK
-    await db.init_db()
-    await db.mark_interrupted_jobs()
-    SCHEDULER_TASK = asyncio.create_task(scheduler_loop(), name="source-scheduler")
-    yield
-    if SCHEDULER_TASK:
-        SCHEDULER_TASK.cancel()
-        with suppress(asyncio.CancelledError):
-            await SCHEDULER_TASK
-    for task in list(TASKS.values()):
-        task.cancel()
-    if TASKS:
-        await asyncio.gather(*TASKS.values(), return_exceptions=True)
+    with single_instance():
+        await db.init_db()
+        await db.mark_interrupted_jobs()
+        SCHEDULER_TASK = asyncio.create_task(scheduler_loop(), name="source-scheduler")
+        try:
+            yield
+        finally:
+            SCHEDULER_TASK.cancel()
+            with suppress(asyncio.CancelledError):
+                await SCHEDULER_TASK
+            tasks = list(TASKS.values())
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
 
 
 app = FastAPI(title="Database Scrape & Organize Tool", version="0.1.0", lifespan=lifespan)
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "[::1]", "testserver"])
+
+
+@app.middleware("http")
+async def local_security(request, call_next):
+    origin = request.headers.get("origin")
+    if request.method not in {"GET", "HEAD", "OPTIONS"} and origin and origin != str(request.base_url).rstrip("/"):
+        return JSONResponse({"detail": "Cross-origin mutation forbidden"}, status_code=403)
+    response = await call_next(request)
+    response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 STATIC_DIR = BASE_DIR / "app" / "static"
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
@@ -113,7 +146,11 @@ async def get_sources():
 @app.post("/api/sources", status_code=201)
 async def post_source(payload: SourceCreate):
     data = payload.model_dump(mode="json")
-    data["start_url"] = str(payload.start_url)
+    data["start_url"] = canonicalize_url(str(payload.start_url))
+    try:
+        await validate_public_url(data["start_url"])
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     try:
         return await db.create_source(data)
     except Exception as exc:
@@ -132,6 +169,11 @@ async def patch_source(source_id: int, payload: SourceUpdate):
 
 @app.delete("/api/sources/{source_id}", status_code=204)
 async def delete_source(source_id: int):
+    async with SCAN_LOCK:
+        return await _delete_source(source_id)
+
+
+async def _delete_source(source_id: int):
     running = await db.running_job_for_source(source_id)
     if running:
         raise HTTPException(status_code=409, detail="Stop/wait for the active crawl before deleting this source")
@@ -148,6 +190,11 @@ async def scan_source(source_id: int, options: ScanOptions | None = None):
 @app.get("/api/jobs")
 async def jobs(limit: int = Query(default=30, ge=1, le=200)):
     return await db.list_jobs(limit)
+
+
+@app.get("/api/sources/{source_id}/errors")
+async def source_errors(source_id: int):
+    return await db.page_errors(source_id)
 
 
 @app.get("/api/jobs/{job_id}")
@@ -178,10 +225,17 @@ async def export_records(format: str = "csv", q: str = "", source_id: int | None
     fmt = format.lower()
     if fmt not in {"csv", "xlsx", "json"}:
         raise HTTPException(status_code=400, detail="format must be csv, xlsx, or json")
-    records = await db.all_records_for_export(q=q.strip(), source_id=source_id)
+    try:
+        records = await db.all_records_for_export(q=q.strip(), source_id=source_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
+    return await asyncio.to_thread(build_export, fmt, records)
+
+
+def build_export(fmt, records):
     columns = [
         "id", "source_name", "name", "company", "phone", "address", "date", "external_id",
-        "source_url", "first_seen", "last_seen", "last_changed", "active",
+        "source_url", "first_seen", "last_seen", "last_changed", "active", "inactive_since", "extra_json",
     ]
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
 
@@ -196,23 +250,21 @@ async def export_records(format: str = "csv", q: str = "", source_id: int | None
         text = io.StringIO()
         writer = csv.DictWriter(text, fieldnames=columns, extrasaction="ignore")
         writer.writeheader()
-        writer.writerows(records)
+        writer.writerows({k: spreadsheet_text(row.get(k)) for k in columns} for row in records)
         return StreamingResponse(
             io.BytesIO(text.getvalue().encode("utf-8-sig")), media_type="text/csv",
             headers={"Content-Disposition": f'attachment; filename="records-{stamp}.csv"'},
         )
 
-    workbook = Workbook()
-    sheet = workbook.active
-    sheet.title = "Records"
+    workbook = Workbook(write_only=True)
+    sheet = workbook.create_sheet("Records")
+    sheet.freeze_panes = "A2"
+    sheet.auto_filter.ref = f"A1:{get_column_letter(len(columns))}{len(records) + 1}"
+    for index in range(1, len(columns) + 1):
+        sheet.column_dimensions[get_column_letter(index)].width = 24
     sheet.append(columns)
     for row in records:
-        sheet.append([row.get(k) for k in columns])
-    sheet.freeze_panes = "A2"
-    sheet.auto_filter.ref = sheet.dimensions
-    for column_cells in sheet.columns:
-        width = min(max(len(str(cell.value or "")) for cell in column_cells) + 2, 60)
-        sheet.column_dimensions[column_cells[0].column_letter].width = width
+        sheet.append([spreadsheet_text(row.get(k)) for k in columns])
     binary = io.BytesIO()
     workbook.save(binary)
     binary.seek(0)
@@ -221,3 +273,12 @@ async def export_records(format: str = "csv", q: str = "", source_id: int | None
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="records-{stamp}.xlsx"'},
     )
+
+
+def spreadsheet_text(value):
+    if not isinstance(value, str):
+        return value
+    value = ILLEGAL_CHARACTERS_RE.sub("", value)
+    if value.lstrip().startswith(("=", "+", "-", "@")):
+        return "'" + value
+    return value

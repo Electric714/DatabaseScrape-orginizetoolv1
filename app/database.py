@@ -1,3 +1,6 @@
+import asyncio
+import functools
+from concurrent.futures import ThreadPoolExecutor
 import json
 import sqlite3
 from contextlib import closing
@@ -21,7 +24,7 @@ def connect() -> sqlite3.Connection:
     return conn
 
 
-async def init_db() -> None:
+def _sync_init_db() -> None:
     with closing(connect()) as conn:
         conn.executescript(
             """
@@ -105,12 +108,44 @@ async def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_records_phone ON records(phone);
             CREATE INDEX IF NOT EXISTS idx_records_address ON records(address);
             CREATE INDEX IF NOT EXISTS idx_jobs_source ON crawl_jobs(source_id, id DESC);
+            CREATE INDEX IF NOT EXISTS idx_records_changed ON records(last_changed DESC, id DESC);
             """
         )
+        columns = {r["name"] for r in conn.execute("PRAGMA table_info(pages)")}
+        if "rendered" not in columns:
+            conn.execute("ALTER TABLE pages ADD COLUMN rendered INTEGER NOT NULL DEFAULT 0")
+        if "fetch_mode" not in columns:
+            conn.execute("ALTER TABLE pages ADD COLUMN fetch_mode TEXT")
+        record_columns = {r["name"] for r in conn.execute("PRAGMA table_info(records)")}
+        if "inactive_since" not in record_columns:
+            conn.execute("ALTER TABLE records ADD COLUMN inactive_since TEXT")
+        conn.execute("""CREATE TABLE IF NOT EXISTS page_records (
+            source_id INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+            url TEXT NOT NULL,
+            record_id INTEGER NOT NULL REFERENCES records(id) ON DELETE CASCADE,
+            last_job INTEGER NOT NULL,
+            payload_hash TEXT,
+            PRIMARY KEY(source_id,url,record_id)
+        )""")
+        if "payload_hash" not in {r["name"] for r in conn.execute("PRAGMA table_info(page_records)")}:
+            conn.execute("ALTER TABLE page_records ADD COLUMN payload_hash TEXT")
+            conn.execute("UPDATE pages SET content_hash=NULL,etag=NULL,last_modified=NULL")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_page_records_scan ON page_records(source_id,last_job,record_id)")
+        # Re-key once, preserving record IDs and history. Previously merged people
+        # cannot be reconstructed from an old snapshot; a full rescan is necessary.
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        if version < 2:
+            for row in conn.execute("SELECT * FROM records").fetchall():
+                payload = dict(row)
+                payload["extra"] = json.loads(payload["extra_json"] or "{}")
+                conn.execute("UPDATE records SET entity_key=?, content_hash=? WHERE id=?",
+                             (entity_key(payload), record_hash(payload), row["id"]))
+            conn.execute("UPDATE pages SET content_hash=NULL, etag=NULL, last_modified=NULL")
+            conn.execute("PRAGMA user_version=2")
         conn.commit()
 
 
-async def mark_interrupted_jobs() -> None:
+def _sync_mark_interrupted_jobs() -> None:
     with closing(connect()) as conn:
         conn.execute(
             "UPDATE crawl_jobs SET status='interrupted', finished_at=?, message='Application restarted during crawl' WHERE status IN ('queued','running')",
@@ -119,7 +154,7 @@ async def mark_interrupted_jobs() -> None:
         conn.commit()
 
 
-async def create_source(data: dict[str, Any]) -> dict[str, Any]:
+def _sync_create_source(data: dict[str, Any]) -> dict[str, Any]:
     now = utcnow()
     with closing(connect()) as conn:
         cur = conn.execute(
@@ -133,16 +168,16 @@ async def create_source(data: dict[str, Any]) -> dict[str, Any]:
         )
         conn.commit()
         source_id = int(cur.lastrowid)
-    return await get_source(source_id)
+    return _sync_get_source(source_id)
 
 
-async def get_source(source_id: int) -> dict[str, Any] | None:
+def _sync_get_source(source_id: int) -> dict[str, Any] | None:
     with closing(connect()) as conn:
         row = conn.execute("SELECT * FROM sources WHERE id=?", (source_id,)).fetchone()
         return dict(row) if row else None
 
 
-async def list_sources() -> list[dict[str, Any]]:
+def _sync_list_sources() -> list[dict[str, Any]]:
     with closing(connect()) as conn:
         rows = conn.execute(
             """SELECT s.*,
@@ -154,37 +189,37 @@ async def list_sources() -> list[dict[str, Any]]:
         return [dict(r) for r in rows]
 
 
-async def update_source(source_id: int, data: dict[str, Any]) -> dict[str, Any] | None:
+def _sync_update_source(source_id: int, data: dict[str, Any]) -> dict[str, Any] | None:
     if not data:
-        return await get_source(source_id)
+        return _sync_get_source(source_id)
     allowed = {"name", "auto_scan", "interval_minutes", "max_pages", "max_depth", "concurrency", "delay_ms", "render_mode", "respect_robots"}
     values = {k: v for k, v in data.items() if k in allowed and v is not None}
     for key in ("auto_scan", "respect_robots"):
         if key in values:
             values[key] = int(values[key])
     if not values:
-        return await get_source(source_id)
+        return _sync_get_source(source_id)
     clause = ", ".join(f"{k}=?" for k in values)
     with closing(connect()) as conn:
         conn.execute(f"UPDATE sources SET {clause} WHERE id=?", (*values.values(), source_id))
         conn.commit()
-    return await get_source(source_id)
+    return _sync_get_source(source_id)
 
 
-async def delete_source(source_id: int) -> bool:
+def _sync_delete_source(source_id: int) -> bool:
     with closing(connect()) as conn:
         cur = conn.execute("DELETE FROM sources WHERE id=?", (source_id,))
         conn.commit()
         return cur.rowcount > 0
 
 
-async def mark_source_scanned(source_id: int) -> None:
+def _sync_mark_source_scanned(source_id: int) -> None:
     with closing(connect()) as conn:
         conn.execute("UPDATE sources SET last_scan_at=? WHERE id=?", (utcnow(), source_id))
         conn.commit()
 
 
-async def create_job(source_id: int, force_full: bool) -> int:
+def _sync_create_job(source_id: int, force_full: bool) -> int:
     with closing(connect()) as conn:
         cur = conn.execute(
             "INSERT INTO crawl_jobs(source_id,status,force_full) VALUES (?, 'queued', ?)",
@@ -194,7 +229,7 @@ async def create_job(source_id: int, force_full: bool) -> int:
         return int(cur.lastrowid)
 
 
-async def update_job(job_id: int, **fields: Any) -> None:
+def _sync_update_job(job_id: int, **fields: Any) -> None:
     if not fields:
         return
     clause = ", ".join(f"{k}=?" for k in fields)
@@ -203,7 +238,7 @@ async def update_job(job_id: int, **fields: Any) -> None:
         conn.commit()
 
 
-async def increment_job(job_id: int, **increments: int) -> None:
+def _sync_increment_job(job_id: int, **increments: int) -> None:
     if not increments:
         return
     clause = ", ".join(f"{k}={k}+?" for k in increments)
@@ -212,7 +247,7 @@ async def increment_job(job_id: int, **increments: int) -> None:
         conn.commit()
 
 
-async def get_job(job_id: int) -> dict[str, Any] | None:
+def _sync_get_job(job_id: int) -> dict[str, Any] | None:
     with closing(connect()) as conn:
         row = conn.execute(
             "SELECT j.*, s.name AS source_name FROM crawl_jobs j JOIN sources s ON s.id=j.source_id WHERE j.id=?",
@@ -221,7 +256,7 @@ async def get_job(job_id: int) -> dict[str, Any] | None:
         return dict(row) if row else None
 
 
-async def list_jobs(limit: int = 30) -> list[dict[str, Any]]:
+def _sync_list_jobs(limit: int = 30) -> list[dict[str, Any]]:
     with closing(connect()) as conn:
         rows = conn.execute(
             "SELECT j.*, s.name AS source_name FROM crawl_jobs j JOIN sources s ON s.id=j.source_id ORDER BY j.id DESC LIMIT ?",
@@ -230,7 +265,7 @@ async def list_jobs(limit: int = 30) -> list[dict[str, Any]]:
         return [dict(r) for r in rows]
 
 
-async def running_job_for_source(source_id: int) -> dict[str, Any] | None:
+def _sync_running_job_for_source(source_id: int) -> dict[str, Any] | None:
     with closing(connect()) as conn:
         row = conn.execute(
             "SELECT * FROM crawl_jobs WHERE source_id=? AND status IN ('queued','running') ORDER BY id DESC LIMIT 1",
@@ -239,13 +274,13 @@ async def running_job_for_source(source_id: int) -> dict[str, Any] | None:
         return dict(row) if row else None
 
 
-async def get_page(source_id: int, url: str) -> dict[str, Any] | None:
+def _sync_get_page(source_id: int, url: str) -> dict[str, Any] | None:
     with closing(connect()) as conn:
         row = conn.execute("SELECT * FROM pages WHERE source_id=? AND url=?", (source_id, url)).fetchone()
         return dict(row) if row else None
 
 
-async def upsert_page(source_id: int, url: str, **fields: Any) -> None:
+def _sync_upsert_page(source_id: int, url: str, **fields: Any) -> None:
     fields["last_crawled_at"] = utcnow()
     with closing(connect()) as conn:
         existing = conn.execute("SELECT id FROM pages WHERE source_id=? AND url=?", (source_id, url)).fetchone()
@@ -262,13 +297,14 @@ async def upsert_page(source_id: int, url: str, **fields: Any) -> None:
         conn.commit()
 
 
-async def upsert_record(source_id: int, record: dict[str, Any]) -> str:
+def _sync_upsert_record(source_id: int, record: dict[str, Any]) -> str:
     now = utcnow()
     normalized = canonical_record(record)
     key = entity_key(normalized)
     digest = record_hash(normalized)
     payload_json = json.dumps(normalized, ensure_ascii=False, sort_keys=True)
     with closing(connect()) as conn:
+        conn.execute("BEGIN IMMEDIATE")
         existing = conn.execute(
             "SELECT * FROM records WHERE source_id=? AND entity_key=?", (source_id, key)
         ).fetchone()
@@ -293,7 +329,7 @@ async def upsert_record(source_id: int, record: dict[str, Any]) -> str:
                 "source_url": existing["source_url"], "extra": json.loads(existing["extra_json"] or "{}"),
             }, ensure_ascii=False, sort_keys=True)
             conn.execute(
-                """UPDATE records SET content_hash=?,name=?,company=?,phone=?,address=?,date=?,external_id=?,source_url=?,extra_json=?,last_seen=?,last_changed=?,active=1 WHERE id=?""",
+                """UPDATE records SET content_hash=?,name=?,company=?,phone=?,address=?,date=?,external_id=?,source_url=?,extra_json=?,last_seen=?,last_changed=?,active=1,inactive_since=NULL WHERE id=?""",
                 (digest, normalized["name"], normalized["company"], normalized["phone"], normalized["address"], normalized["date"],
                  normalized["external_id"], normalized["source_url"], json.dumps(normalized["extra"], ensure_ascii=False), now, now, existing["id"]),
             )
@@ -303,21 +339,21 @@ async def upsert_record(source_id: int, record: dict[str, Any]) -> str:
             )
             conn.commit()
             return "updated"
-        conn.execute("UPDATE records SET last_seen=?, active=1 WHERE id=?", (now, existing["id"]))
+        conn.execute("UPDATE records SET last_seen=?, active=1,inactive_since=NULL WHERE id=?", (now, existing["id"]))
         conn.commit()
         return "unchanged"
 
 
-async def search_records(q: str = "", source_id: int | None = None, limit: int = 100, offset: int = 0) -> dict[str, Any]:
+def _sync_search_records(q: str = "", source_id: int | None = None, limit: int = 100, offset: int = 0) -> dict[str, Any]:
     clauses = ["1=1"]
     params: list[Any] = []
     if source_id:
         clauses.append("r.source_id=?")
         params.append(source_id)
     if q:
-        like = f"%{q}%"
-        clauses.append("(r.name LIKE ? OR r.company LIKE ? OR r.phone LIKE ? OR r.address LIKE ? OR r.date LIKE ? OR r.source_url LIKE ?)")
-        params.extend([like] * 6)
+        like = "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        clauses.append("(r.name LIKE ? ESCAPE '\\' OR r.company LIKE ? ESCAPE '\\' OR r.phone LIKE ? ESCAPE '\\' OR r.address LIKE ? ESCAPE '\\' OR r.date LIKE ? ESCAPE '\\' OR r.source_url LIKE ? ESCAPE '\\' OR r.external_id LIKE ? ESCAPE '\\')")
+        params.extend([like] * 7)
     where = " AND ".join(clauses)
     with closing(connect()) as conn:
         total = conn.execute(f"SELECT COUNT(*) c FROM records r WHERE {where}", params).fetchone()["c"]
@@ -329,12 +365,14 @@ async def search_records(q: str = "", source_id: int | None = None, limit: int =
         return {"total": total, "items": [dict(r) for r in rows]}
 
 
-async def all_records_for_export(q: str = "", source_id: int | None = None) -> list[dict[str, Any]]:
-    result = await search_records(q=q, source_id=source_id, limit=250000, offset=0)
+def _sync_all_records_for_export(q: str = "", source_id: int | None = None) -> list[dict[str, Any]]:
+    result = _sync_search_records(q=q, source_id=source_id, limit=250000, offset=0)
+    if result["total"] > len(result["items"]):
+        raise ValueError("Export exceeds 250000 records; narrow the search or source filter")
     return result["items"]
 
 
-async def record_history(record_id: int) -> list[dict[str, Any]]:
+def _sync_record_history(record_id: int) -> list[dict[str, Any]]:
     with closing(connect()) as conn:
         rows = conn.execute(
             "SELECT * FROM record_history WHERE record_id=? ORDER BY id DESC", (record_id,)
@@ -342,10 +380,87 @@ async def record_history(record_id: int) -> list[dict[str, Any]]:
         return [dict(r) for r in rows]
 
 
-async def stats() -> dict[str, int]:
+def _sync_stats() -> dict[str, int]:
     with closing(connect()) as conn:
         source_count = conn.execute("SELECT COUNT(*) c FROM sources").fetchone()["c"]
         record_count = conn.execute("SELECT COUNT(*) c FROM records").fetchone()["c"]
         changed_24h = conn.execute("SELECT COUNT(*) c FROM records WHERE julianday(last_changed) >= julianday('now','-1 day')").fetchone()["c"]
         running = conn.execute("SELECT COUNT(*) c FROM crawl_jobs WHERE status IN ('queued','running')").fetchone()["c"]
         return {"sources": source_count, "records": record_count, "changed_24h": changed_24h, "running_jobs": running}
+
+
+def _sync_observe_page_records(source_id: int, url: str, job_id: int, records: list[dict]) -> None:
+    with closing(connect()) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("DELETE FROM page_records WHERE source_id=? AND url=?", (source_id, url))
+        for record in records:
+            conn.execute("""INSERT OR REPLACE INTO page_records(source_id,url,record_id,last_job,payload_hash)
+                SELECT ?,?,id,?,? FROM records WHERE source_id=? AND entity_key=?""",
+                (source_id, url, job_id, record_hash(record), source_id, entity_key(record)))
+        conn.commit()
+
+
+def _sync_touch_page_records(source_id: int, url: str, job_id: int) -> list[dict]:
+    with closing(connect()) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("UPDATE page_records SET last_job=? WHERE source_id=? AND url=?", (job_id, source_id, url))
+        conn.execute("""UPDATE records SET last_seen=?,active=1,inactive_since=NULL WHERE id IN
+            (SELECT record_id FROM page_records WHERE source_id=? AND url=?)""", (utcnow(), source_id, url))
+        observations = conn.execute("""SELECT r.entity_key,p.payload_hash FROM page_records p
+            JOIN records r ON r.id=p.record_id WHERE p.source_id=? AND p.url=?""", (source_id, url)).fetchall()
+        conn.commit()
+        return [dict(row) for row in observations]
+
+
+def _sync_finish_observations(source_id: int, job_id: int) -> None:
+    with closing(connect()) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("""UPDATE records SET active=0,inactive_since=? WHERE source_id=? AND active=1 AND id NOT IN
+            (SELECT record_id FROM page_records WHERE source_id=? AND last_job=?)""",
+            (utcnow(), source_id, source_id, job_id))
+        conn.commit()
+
+
+def _sync_page_errors(source_id: int) -> list[dict]:
+    with closing(connect()) as conn:
+        rows = conn.execute("SELECT url,last_error,last_crawled_at FROM pages WHERE source_id=? AND last_error IS NOT NULL ORDER BY last_crawled_at DESC LIMIT 200", (source_id,)).fetchall()
+        return [dict(row) for row in rows]
+
+# SQLite and lock waits run off the event loop. One worker serializes local DB
+# operations; write transactions still protect read-modify-write across connections.
+_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="crawler-db")
+
+
+def _async_database(function):
+    @functools.wraps(function)
+    async def call(*args, **kwargs):
+        return await asyncio.get_running_loop().run_in_executor(
+            _EXECUTOR, functools.partial(function, *args, **kwargs))
+    return call
+
+
+init_db = _async_database(_sync_init_db)
+mark_interrupted_jobs = _async_database(_sync_mark_interrupted_jobs)
+create_source = _async_database(_sync_create_source)
+get_source = _async_database(_sync_get_source)
+list_sources = _async_database(_sync_list_sources)
+update_source = _async_database(_sync_update_source)
+delete_source = _async_database(_sync_delete_source)
+mark_source_scanned = _async_database(_sync_mark_source_scanned)
+create_job = _async_database(_sync_create_job)
+update_job = _async_database(_sync_update_job)
+increment_job = _async_database(_sync_increment_job)
+get_job = _async_database(_sync_get_job)
+list_jobs = _async_database(_sync_list_jobs)
+running_job_for_source = _async_database(_sync_running_job_for_source)
+get_page = _async_database(_sync_get_page)
+upsert_page = _async_database(_sync_upsert_page)
+upsert_record = _async_database(_sync_upsert_record)
+search_records = _async_database(_sync_search_records)
+all_records_for_export = _async_database(_sync_all_records_for_export)
+record_history = _async_database(_sync_record_history)
+stats = _async_database(_sync_stats)
+observe_page_records = _async_database(_sync_observe_page_records)
+touch_page_records = _async_database(_sync_touch_page_records)
+finish_observations = _async_database(_sync_finish_observations)
+page_errors = _async_database(_sync_page_errors)

@@ -1,4 +1,5 @@
 from typing import Protocol
+from urllib.parse import urlsplit
 
 from .extractor import discover_links, extract_records
 
@@ -6,6 +7,7 @@ from .extractor import discover_links, extract_records
 class SourceAdapter(Protocol):
     def extract(self, html: str, url: str) -> list[dict]: ...
     def links(self, html: str, url: str) -> list[str]: ...
+    def allowed_url(self, url: str) -> bool: ...
 
 
 class GenericAdapter:
@@ -17,7 +19,14 @@ class GenericAdapter:
     def links(self, html: str, url: str) -> list[str]:
         return discover_links(html, url)
 
+    def allowed_url(self, url: str) -> bool:
+        return True
 
-def adapter_for_url(_url: str) -> SourceAdapter:
-    # Site-specific adapters will be selected here once the six target sites are known.
-    return GenericAdapter()
+
+# Register exact hostnames here. Adapters return a stable, namespaced external_id
+# and can narrow query/pagination boundaries, but cannot widen the network policy.
+ADAPTERS: dict[str, type[GenericAdapter]] = {}
+
+
+def adapter_for_url(url: str) -> SourceAdapter:
+    return ADAPTERS.get((urlsplit(url).hostname or "").lower(), GenericAdapter)()

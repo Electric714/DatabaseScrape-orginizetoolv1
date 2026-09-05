@@ -5,11 +5,11 @@ from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
 
-from .normalizer import clean_text
+from .normalizer import clean_text, canonical_record, entity_key
 
-PHONE_RE = re.compile(r"(?:\+?1[\s.-]?)?(?:\(?\d{3}\)?[\s.-]?)\d{3}[\s.-]?\d{4}")
+PHONE_RE = re.compile(r"(?<!\d)(?:\+?1[\s.-]?)?(?:\(?\d{3}\)?[\s.-]?)\d{3}[\s.-]?\d{4}(?!\d)")
 DATE_RE = re.compile(
-    r"\b(?:\d{1,2}[/-]\d{1,2}[/-](?:\d{2}|\d{4})|"
+    r"\b(?:\d{4}-\d{2}-\d{2}|\d{1,2}[/-]\d{1,2}[/-](?:\d{4}|\d{2})|"
     r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
     r"Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
     r"\s+\d{1,2},?\s+\d{4})\b",
@@ -47,6 +47,9 @@ def _jsonld_objects(value: Any):
     elif isinstance(value, dict):
         if "@graph" in value:
             yield from _jsonld_objects(value["@graph"])
+        for key, nested in value.items():
+            if key != "@graph" and isinstance(nested, (list, dict)):
+                yield from _jsonld_objects(nested)
         yield value
 
 
@@ -77,13 +80,16 @@ def extract_jsonld(soup: BeautifulSoup, page_url: str) -> list[dict[str, Any]]:
             continue
         for obj in _jsonld_objects(payload):
             typ = obj.get("@type", "")
-            types = {typ} if isinstance(typ, str) else set(typ or [])
+            types = {typ} if isinstance(typ, str) else {t for t in typ if isinstance(t, str)} if isinstance(typ, list) else set()
             if not types.intersection({"Person", "Organization", "LocalBusiness", "ProfessionalService", "Attorney"}):
                 continue
             contact = obj.get("contactPoint")
             if isinstance(contact, list):
                 contact = contact[0] if contact else {}
             contact = contact if isinstance(contact, dict) else {}
+            identifier = obj.get("identifier") or obj.get("@id") or ""
+            if isinstance(identifier, dict):
+                identifier = identifier.get("value") or identifier.get("@id") or ""
             record = {
                 "name": obj.get("name", "") if "Person" in types else "",
                 "company": obj.get("name", "") if "Person" not in types else clean_text(
@@ -92,9 +98,11 @@ def extract_jsonld(soup: BeautifulSoup, page_url: str) -> list[dict[str, Any]]:
                 "phone": obj.get("telephone") or contact.get("telephone") or "",
                 "address": _address_from_jsonld(obj.get("address")),
                 "date": obj.get("dateModified") or obj.get("datePublished") or "",
-                "external_id": obj.get("identifier") or obj.get("@id") or "",
+                "external_id": identifier,
                 "source_url": page_url,
-                "extra": {"jsonld_type": sorted(types)},
+                "extra": {"jsonld_type": sorted(types),
+                          **{k: obj[k] for k in ("givenName", "additionalName", "familyName") if k in obj},
+                          **({"postal_address": obj["address"]} if isinstance(obj.get("address"), dict) else {})},
             }
             if _record_has_signal(record):
                 records.append(record)
@@ -182,6 +190,8 @@ def extract_labeled_blocks(soup: BeautifulSoup, page_url: str) -> list[dict[str,
 
 
 def extract_page_fallback(soup: BeautifulSoup, page_url: str) -> list[dict[str, Any]]:
+    for element in soup(["nav", "footer", "header", "script", "style"]):
+        element.decompose()
     text = clean_text(soup.get_text(" ", strip=True))
     if not text or len(text) > 30000:
         return []
@@ -213,11 +223,25 @@ def extract_records(html: str, page_url: str) -> list[dict[str, Any]]:
     records.extend(extract_tables(soup, page_url))
     records.extend(extract_definition_lists(soup, page_url))
     records.extend(extract_labeled_blocks(soup, page_url))
-    if not records:
-        records.extend(extract_page_fallback(soup, page_url))
-    return records
+    # Page-wide title/phone pairing is too speculative for record collection.
+    # Preserve stronger JSON-LD/table results when overlapping card heuristics agree.
+    unique = {}
+    for record in records:
+        record["source_url"] = safe_link(page_url, record.get("source_url", page_url))
+        normalized = canonical_record(record)
+        unique.setdefault(entity_key(normalized), normalized)
+    return list(unique.values())
 
 
 def discover_links(html: str, page_url: str) -> list[str]:
     soup = BeautifulSoup(html, "lxml")
-    return [urljoin(page_url, a["href"]) for a in soup.find_all("a", href=True)]
+    base = soup.find("base", href=True)
+    origin = urljoin(page_url, base["href"]) if base else page_url
+    return [urljoin(origin, a["href"]) for a in soup.select("a[href], link[rel~=next][href]")]
+
+
+def safe_link(page_url: str, href: str) -> str:
+    from urllib.parse import urlsplit
+    value = urljoin(page_url, href)
+    parts = urlsplit(value)
+    return value if parts.scheme in {"http", "https"} and not parts.username else page_url

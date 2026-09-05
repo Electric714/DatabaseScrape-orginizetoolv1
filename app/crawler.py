@@ -3,26 +3,64 @@ import hashlib
 import json
 import re
 import time
+import weakref
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 from urllib.robotparser import RobotFileParser
 
 import httpx
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, UnicodeDammit
 from lxml import etree
 
 from . import database as db
 from .adapters import adapter_for_url
 from .config import ASSET_EXTENSIONS, DEFAULT_TIMEOUT_SECONDS, DEFAULT_USER_AGENT, MAX_BODY_BYTES
+from .security import PublicTransport
+from .normalizer import entity_key, record_hash
 
-TRACKING_PARAMS = {
-    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "gclid", "fbclid",
-    "mc_cid", "mc_eid", "ref", "referrer"
-}
-DYNAMIC_HINTS = re.compile(
-    r"enable javascript|javascript is required|please enable javascript|id=[\"'](?:app|root|__next)[\"']",
-    re.IGNORECASE,
-)
+_HOST_GATES = weakref.WeakKeyDictionary()
+
+TRACKING_PARAMS = {"utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "gclid", "fbclid", "mc_cid", "mc_eid"}
+CHALLENGE = re.compile(r"captcha|verify (?:that )?you are human|checking your browser|access denied|cf-chl-|challenge-platform", re.I)
+
+
+def canonicalize_url(url: str) -> str:
+    if not url:
+        return ""
+    try:
+        if "\\" in url or any(ord(c) < 32 for c in url):
+            return ""
+        parts = urlsplit(url.strip())
+        if parts.scheme not in {"http", "https"} or not parts.hostname or parts.username is not None or parts.password is not None:
+            return ""
+        host = parts.hostname.rstrip(".").encode("idna").decode().lower()
+        if "%" in host:
+            return ""
+        host = f"[{host}]" if ":" in host else host
+        port = parts.port
+        if port and port != (443 if parts.scheme == "https" else 80):
+            host += f":{port}"
+        query = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if k.lower() not in TRACKING_PARAMS]
+        query.sort(key=lambda pair: pair[0])  # Preserve order of repeated values.
+        path = re.sub(r"/{2,}", "/", parts.path or "/")
+        path = re.sub(r"%([0-9a-fA-F]{2})",
+            lambda m: chr(int(m[1], 16)) if chr(int(m[1], 16)) in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~" else m[0].upper(), path)
+        segments = []
+        for segment in path.split("/"):
+            if segment == "..":
+                if segments:
+                    segments.pop()
+            elif segment and segment != ".":
+                segments.append(segment)
+        trailing = path.endswith(("/", "/.", "/.."))
+        path = "/" + "/".join(segments)
+        if trailing and path != "/":
+            path += "/"
+        return urlunsplit((parts.scheme, host, path, urlencode(query), ""))
+    except (ValueError, UnicodeError):
+        return ""
 
 
 @dataclass
@@ -33,356 +71,351 @@ class FetchResult:
     headers: dict[str, str]
     rendered: bool = False
     not_modified: bool = False
+    body: bytes = b""
 
 
 class BrowserRenderer:
-    def __init__(self):
-        self.playwright = None
-        self.browser = None
+    """No direct browser egress: route all HTTP through the guarded client."""
+    def __init__(self, engine):
+        self.engine = engine
+        self.playwright = self.browser = self.context = None
+        self.lock = asyncio.Lock()
 
-    async def start(self):
-        if self.browser:
-            return
-        try:
-            from playwright.async_api import async_playwright
-        except ImportError as exc:
-            raise RuntimeError("Playwright is not installed") from exc
-        self.playwright = await async_playwright().start()
-        self.browser = await self.playwright.chromium.launch(headless=True)
+    async def fetch(self, client, url):
+        async with self.lock:
+            if self.context is None:
+                from playwright.async_api import async_playwright
+                self.playwright = await async_playwright().start()
+                self.browser = await self.playwright.chromium.launch(headless=True)
+                self.context = await self.browser.new_context(user_agent=DEFAULT_USER_AGENT, service_workers="block")
+                await self.context.route_web_socket("**/*", lambda ws: ws.close())
+            page = await self.context.new_page()
+            failures = []
 
-    async def fetch(self, url: str, timeout_ms: int = 30000) -> FetchResult:
-        await self.start()
-        page = await self.browser.new_page(user_agent=DEFAULT_USER_AGENT)
-        try:
-            response = await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+            async def route_request(route):
+                request = route.request
+                try:
+                    if request.resource_type in {"image", "media", "font"}:
+                        await route.abort()
+                        return
+                    if request.method != "GET":
+                        raise ValueError("Browser non-GET request blocked")
+                    self.engine._check_request(request.url)
+                    for cookie in await self.context.cookies(request.url):
+                        client.cookies.set(cookie["name"], cookie["value"], domain=cookie["domain"], path=cookie["path"])
+                    result = await self.engine._http_fetch_with_retry(client, request.url, {}, redirects=False)
+                    if result.status >= 400 or CHALLENGE.search(result.text):
+                        raise ValueError(f"Browser resource denied: HTTP {result.status}")
+                    headers = {k: v for k, v in result.headers.items() if k not in {"content-encoding", "content-length", "transfer-encoding"}}
+                    if "content-type" in headers:
+                        headers["content-type"] = headers["content-type"].split(";")[0] + "; charset=utf-8"
+                    await route.fulfill(status=result.status, headers=headers, body=result.text.encode("utf-8"))
+                except Exception as exc:
+                    failures.append(str(exc))
+                    await route.abort()
+
+            await page.route("**/*", route_request)
             try:
-                await page.wait_for_load_state("networkidle", timeout=min(timeout_ms, 10000))
-            except Exception:
-                pass
-            html = await page.content()
-            status = response.status if response else 200
-            headers = await response.all_headers() if response else {}
-            return FetchResult(url=page.url, status=status, text=html, headers=headers, rendered=True)
-        finally:
-            await page.close()
+                response = await page.goto(url, wait_until="networkidle", timeout=30000)
+                if failures:
+                    raise ValueError("Rendering incomplete: " + failures[0])
+                html = await page.content()
+                if len(html.encode()) > MAX_BODY_BYTES:
+                    raise ValueError("Rendered page exceeds body limit")
+                return FetchResult(page.url, response.status if response else 200, html, {}, rendered=True)
+            finally:
+                await page.close()
 
     async def close(self):
         if self.browser:
             await self.browser.close()
-            self.browser = None
         if self.playwright:
             await self.playwright.stop()
-            self.playwright = None
 
 
 class CrawlEngine:
-    def __init__(self, source: dict, job_id: int, force_full: bool = False):
-        self.source = source
+    def __init__(self, source: dict, job_id: int, force_full: bool = False, *, transport=None):
+        self.source, self.job_id, self.force_full = source, job_id, force_full
         self.source_id = int(source["id"])
-        self.job_id = job_id
-        self.force_full = force_full
         self.start_url = canonicalize_url(source["start_url"])
-        self.start_host = urlsplit(self.start_url).hostname or ""
-        self.max_pages = int(source["max_pages"])
-        self.max_depth = int(source["max_depth"])
+        self.start_host = urlsplit(self.start_url).hostname
+        self.max_pages, self.max_depth = int(source["max_pages"]), int(source["max_depth"])
         self.concurrency = int(source["concurrency"])
-        self.delay = int(source["delay_ms"]) / 1000.0
+        self.delay = int(source["delay_ms"]) / 1000
         self.render_mode = source["render_mode"]
         self.respect_robots = bool(source["respect_robots"])
-        self.queue: asyncio.Queue[tuple[str, int]] = asyncio.Queue()
-        self.seen: set[str] = set()
+        self.robot_parser = None
+        self.robot_sitemaps = []
+        self.robot_delay = 0
+        self.seen = set()
+        self.record_digests = {}
         self.processed = 0
-        self.stop_requested = False
-        self.robot_parser: RobotFileParser | None = None
-        self.robot_sitemaps: list[str] = []
-        self.robot_delay: float | None = None
-        self.renderer = BrowserRenderer()
+        self.limited = False
+        self.transport = transport  # Test dependency injection; never exposed by API.
+        self.renderer = BrowserRenderer(self)
         self.adapter = adapter_for_url(self.start_url)
-        self._request_gate = asyncio.Lock()
-        self._last_request_at = 0.0
 
     async def run(self):
         await db.update_job(self.job_id, status="running", started_at=db.utcnow(), message="Preparing crawl")
-        timeout = httpx.Timeout(DEFAULT_TIMEOUT_SECONDS)
-        limits = httpx.Limits(max_connections=max(self.concurrency * 2, 10), max_keepalive_connections=max(self.concurrency, 5))
-        async with httpx.AsyncClient(
-            timeout=timeout,
-            limits=limits,
-            follow_redirects=True,
-            headers={"User-Agent": DEFAULT_USER_AGENT, "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"},
-        ) as client:
-            try:
+        try:
+            async with httpx.AsyncClient(
+                transport=self.transport or PublicTransport(), trust_env=False, follow_redirects=False,
+                timeout=DEFAULT_TIMEOUT_SECONDS, headers={"User-Agent": DEFAULT_USER_AGENT},
+            ) as client:
                 await self._load_robots(client)
-                await self._enqueue(self.start_url, 0)
-                for sitemap_url in await self._discover_sitemap_urls(client):
-                    await self._enqueue(sitemap_url, 0)
-                workers = [asyncio.create_task(self._worker(client)) for _ in range(self.concurrency)]
-                await self.queue.join()
-                self.stop_requested = True
-                for worker in workers:
-                    worker.cancel()
-                await asyncio.gather(*workers, return_exceptions=True)
-                await db.update_job(
-                    self.job_id,
-                    status="completed",
-                    finished_at=db.utcnow(),
-                    message=f"Completed. {self.processed} pages processed.",
-                )
-                await self._mark_source_scanned()
-            except asyncio.CancelledError:
-                await db.update_job(self.job_id, status="cancelled", finished_at=db.utcnow(), message="Crawl cancelled")
-                raise
-            except Exception as exc:
-                await db.update_job(self.job_id, status="failed", finished_at=db.utcnow(), message=str(exc)[:1000])
-                raise
-            finally:
-                await self.renderer.close()
+                frontier = [self.start_url, *await self._discover_sitemap_urls(client)]
+                # Level barriers prevent a fast deep path from hiding a shorter path.
+                for depth in range(self.max_depth + 1):
+                    batch = []
+                    for candidate in frontier:
+                        url = canonicalize_url(candidate)
+                        if not self._allowed_url(url) or url in self.seen:
+                            continue
+                        if len(self.seen) >= self.max_pages:
+                            self.limited = True
+                            continue
+                        self.seen.add(url)
+                        batch.append(url)
+                    await db.increment_job(self.job_id, pages_discovered=len(batch))
+                    frontier = {}
+                    for offset in range(0, len(batch), self.concurrency):
+                        results = await asyncio.gather(*(self._process_safely(client, u) for u in batch[offset:offset + self.concurrency]))
+                        for links in results:
+                            for link in links:
+                                if link in self.seen:
+                                    continue
+                                if len(frontier) >= self.max_pages and link not in frontier:
+                                    self.limited = True
+                                    continue
+                                frontier[link] = None
+                    if not frontier:
+                        break
+                    if depth == self.max_depth and any(self._allowed_url(u) and canonicalize_url(u) not in self.seen for u in frontier):
+                        self.limited = True
+                job = await db.get_job(self.job_id)
+                complete = not self.limited and not job["errors"]
+                if complete:
+                    await db.finish_observations(self.source_id, self.job_id)
+                await db.update_job(self.job_id, status="completed" if complete else "partial", finished_at=db.utcnow(),
+                    message=f"{self.processed} pages processed. " + ("Crawl boundary exhausted." if complete else "Limits or errors prevented a complete scan; missing records were not marked inactive."))
+        except asyncio.CancelledError:
+            await db.update_job(self.job_id, status="cancelled", finished_at=db.utcnow(), message="Crawl cancelled")
+            raise
+        except Exception as exc:
+            await db.increment_job(self.job_id, errors=1)
+            await db.update_job(self.job_id, status="failed", finished_at=db.utcnow(), message=str(exc)[:1000])
+            raise
+        finally:
+            await self.renderer.close()
+            await db.mark_source_scanned(self.source_id)
 
-    async def _mark_source_scanned(self):
-        await db.mark_source_scanned(self.source_id)
+    async def _process_safely(self, client, url):
+        try:
+            return await self._process_url(client, url)
+        except Exception as exc:
+            await db.increment_job(self.job_id, errors=1)
+            await db.upsert_page(self.source_id, url, last_error=str(exc)[:1000])
+            return []
+        finally:
+            self.processed += 1
+            await db.increment_job(self.job_id, pages_processed=1)
 
-    async def _worker(self, client: httpx.AsyncClient):
-        while not self.stop_requested:
-            url, depth = await self.queue.get()
-            try:
-                if self.processed >= self.max_pages:
-                    continue
-                if self.respect_robots and self.robot_parser and not self.robot_parser.can_fetch(DEFAULT_USER_AGENT, url):
-                    await db.increment_job(self.job_id, errors=1)
-                    await db.upsert_page(self.source_id, url, last_error="Blocked by robots.txt policy")
-                    continue
-                await self._process_url(client, url, depth)
-            except Exception as exc:
-                await db.increment_job(self.job_id, errors=1)
-                await db.upsert_page(self.source_id, url, last_error=str(exc)[:1000])
-            finally:
-                self.queue.task_done()
-
-    async def _process_url(self, client: httpx.AsyncClient, url: str, depth: int):
+    async def _process_url(self, client, url):
         cached = await db.get_page(self.source_id, url)
         result = await self._fetch(client, url, cached)
-        self.processed += 1
-        await db.increment_job(self.job_id, pages_processed=1)
-
-        if result.not_modified and cached:
-            links = json.loads(cached.get("discovered_links") or "[]")
-            for link in links:
-                await self._enqueue(link, depth + 1)
-            return
-
+        if result.status == 304:
+            if not cached or not cached.get("content_hash"):
+                raise ValueError("304 without a usable cached page")
+            await self._touch_cached(url)
+            await db.upsert_page(self.source_id, url, last_error=None)
+            return json.loads(cached.get("discovered_links") or "[]")
         if result.status >= 400:
-            await db.increment_job(self.job_id, errors=1)
-            await db.upsert_page(
-                self.source_id, url, status_code=result.status,
-                last_error=f"HTTP {result.status}",
-            )
-            return
-
-        content_hash = hashlib.sha256(result.text.encode("utf-8", errors="ignore")).hexdigest()
-        if cached and cached.get("content_hash") == content_hash and not self.force_full:
+            raise ValueError(f"HTTP {result.status}")
+        if CHALLENGE.search(result.text):
+            raise ValueError("Explicit access challenge detected; no rendering attempted")
+        digest = hashlib.sha256(result.text.encode()).hexdigest()
+        if cached and cached.get("content_hash") == digest and not self.force_full:
+            await self._touch_cached(url)
             links = json.loads(cached.get("discovered_links") or "[]")
-            await db.upsert_page(
-                self.source_id, url, status_code=result.status, etag=result.headers.get("etag"),
-                last_modified=result.headers.get("last-modified"), content_hash=content_hash,
-                discovered_links=json.dumps(links), last_error=None,
-            )
-            for link in links:
-                await self._enqueue(link, depth + 1)
-            return
+        else:
+            # Invalidate before persisting records. A crash cannot reuse an old
+            # page cache with newly replaced record associations.
+            await db.upsert_page(self.source_id, url, content_hash=None, etag=None, last_modified=None)
+            links = list(dict.fromkeys(canonicalize_url(u) for u in self.adapter.links(result.text, result.url)))
+            links = [u for u in links if self._allowed_url(u)]
+            records = self.adapter.extract(result.text, result.url)
+            await db.increment_job(self.job_id, records_found=len(records))
+            for record in records:
+                self._register_record(entity_key(record), record_hash(record))
+                outcome = await db.upsert_record(self.source_id, record)
+                if outcome in {"new", "updated"}:
+                    await db.increment_job(self.job_id, **{f"records_{outcome}": 1})
+            await db.observe_page_records(self.source_id, url, self.job_id, records)
+        await db.upsert_page(self.source_id, url, status_code=result.status,
+            etag=None if result.rendered else result.headers.get("etag"),
+            last_modified=None if result.rendered else result.headers.get("last-modified"),
+            content_hash=digest, discovered_links=json.dumps(links), last_error=None, rendered=int(result.rendered), fetch_mode=self.render_mode)
+        return links
 
-        links = [canonicalize_url(x) for x in self.adapter.links(result.text, result.url)]
-        links = [x for x in links if self._allowed_url(x)]
-        records = self.adapter.extract(result.text, result.url)
-        await db.increment_job(self.job_id, records_found=len(records))
-        for record in records:
-            outcome = await db.upsert_record(self.source_id, record)
-            if outcome == "new":
-                await db.increment_job(self.job_id, records_new=1)
-            elif outcome == "updated":
-                await db.increment_job(self.job_id, records_updated=1)
+    def _register_record(self, key, value):
+        if key in self.record_digests and self.record_digests[key] != value:
+            raise ValueError("Conflicting representations of the same record; a site adapter must select the authoritative detail")
+        self.record_digests[key] = value
 
-        await db.upsert_page(
-            self.source_id, url, status_code=result.status, etag=result.headers.get("etag"),
-            last_modified=result.headers.get("last-modified"), content_hash=content_hash,
-            discovered_links=json.dumps(links), last_error=None,
-        )
-        if depth < self.max_depth:
-            for link in links:
-                await self._enqueue(link, depth + 1)
+    async def _touch_cached(self, url):
+        observations = await db.touch_page_records(self.source_id, url, self.job_id)
+        for observation in observations:
+            self._register_record(observation["entity_key"], observation["payload_hash"])
+        await db.increment_job(self.job_id, records_found=len(observations))
 
-    async def _fetch(self, client: httpx.AsyncClient, url: str, cached: dict | None) -> FetchResult:
-        if self.render_mode == "browser":
-            await self._throttle()
-            return await self.renderer.fetch(url)
-
-        headers: dict[str, str] = {}
-        if cached and not self.force_full:
+    async def _fetch(self, client, url, cached):
+        headers = {}
+        if cached and cached.get("fetch_mode") == self.render_mode and not self.force_full and not cached.get("rendered") and self.render_mode != "browser":
             if cached.get("etag"):
                 headers["If-None-Match"] = cached["etag"]
             if cached.get("last_modified"):
                 headers["If-Modified-Since"] = cached["last_modified"]
-
         result = await self._http_fetch_with_retry(client, url, headers)
         if result.status == 304:
             result.not_modified = True
             return result
-
-        # Browser rendering is a rendering fallback only. Explicit denials/challenges are never bypassed.
-        if self.render_mode == "auto" and result.status == 200 and self._looks_dynamic(result.text):
-            await self._throttle()
-            try:
-                rendered = await self.renderer.fetch(result.url)
-                if rendered.status < 400 and len(BeautifulSoup(rendered.text, "lxml").get_text(" ", strip=True)) > 100:
-                    return rendered
-            except Exception:
-                pass
+        if result.status == 200 and not CHALLENGE.search(result.text) and (
+            self.render_mode == "browser" or self.render_mode == "auto" and self._looks_dynamic(result.text)
+        ):
+            return await self.renderer.fetch(client, result.url)
         return result
 
-    async def _http_fetch_with_retry(self, client: httpx.AsyncClient, url: str, headers: dict[str, str]) -> FetchResult:
-        last_error: Exception | None = None
-        for attempt in range(5):
-            try:
+    def _looks_dynamic(self, html):
+        soup = BeautifulSoup(html, "lxml")
+        executable = any(t.get("src") or t.get("type", "").lower() in {"", "module", "text/javascript", "application/javascript"} for t in soup.find_all("script"))
+        for tag in soup(["script", "style"]):
+            tag.extract()
+        return len(soup.get_text(" ", strip=True)) < 250 and (executable or bool(re.search(r"enable javascript|javascript is required", html, re.I)))
+
+    def _allowed_url(self, url):
+        url = canonicalize_url(url)
+        if not url:
+            return False
+        parts = urlsplit(url)
+        return parts.hostname == self.start_host and parts.port in {None, 80, 443} and not any(parts.path.lower().endswith(ext) for ext in ASSET_EXTENSIONS) and self.adapter.allowed_url(url)
+
+    def _check_request(self, url, robots=True):
+        value = canonicalize_url(url)
+        if not value or urlsplit(value).hostname != self.start_host or urlsplit(value).port not in {None, 80, 443}:
+            raise ValueError("Request outside source hostname/port boundary")
+        if robots and self.respect_robots and self.robot_parser and not self.robot_parser.can_fetch(DEFAULT_USER_AGENT, value):
+            raise ValueError("Blocked by robots.txt policy")
+
+    async def _http_fetch_with_retry(self, client, url, headers, *, robots=True, redirects=True):
+        for hop in range(6):
+            self._check_request(url, robots)
+            for attempt in range(4):
                 await self._throttle()
-                response = await client.get(url, headers=headers)
-                if response.status_code in {429, 500, 502, 503, 504}:
-                    retry_after = response.headers.get("retry-after")
-                    if retry_after and retry_after.isdigit():
-                        wait = min(float(retry_after), 60.0)
-                    else:
-                        wait = min(2 ** attempt, 20)
+                try:
+                    async with asyncio.timeout(60), client.stream("GET", url, headers=headers) as response:
+                        body = bytearray()
+                        async for chunk in response.aiter_bytes(chunk_size=65536):
+                            body.extend(chunk)
+                            if len(body) > MAX_BODY_BYTES:
+                                raise ValueError("Response exceeds body limit")
+                        try:
+                            kind = response.headers.get("content-type", "")
+                            if "charset=" not in kind.lower() and ("html" in kind or "xml" in kind):
+                                text = UnicodeDammit(bytes(body), is_html="html" in kind).unicode_markup or ""
+                            else:
+                                text = body.decode(response.encoding or "utf-8", errors="replace")
+                        except LookupError:
+                            text = body.decode("utf-8", errors="replace")
+                        result = FetchResult(str(response.url), response.status_code, text, dict(response.headers), body=bytes(body))
+                    if result.status not in {429, 500, 502, 503, 504} or attempt == 3:
+                        break
+                    wait = min(2 ** attempt, 20)
+                    retry = result.headers.get("retry-after", "")
+                    try:
+                        wait = max(0, float(retry)) if retry.isdigit() else max(0, (parsedate_to_datetime(retry) - datetime.now(timezone.utc)).total_seconds())
+                    except (ValueError, TypeError, OverflowError):
+                        pass
+                    if wait > 60:
+                        raise ValueError("Server requested a longer retry delay; rescan later")
                     await asyncio.sleep(wait)
-                    continue
-                content_type = response.headers.get("content-type", "").lower()
-                if response.status_code != 304 and not any(x in content_type for x in ("text/", "html", "xml", "json", "xhtml")):
-                    return FetchResult(str(response.url), response.status_code, "", dict(response.headers))
-                body = response.content[:MAX_BODY_BYTES]
-                encoding = response.encoding or "utf-8"
-                text = body.decode(encoding, errors="replace")
-                return FetchResult(str(response.url), response.status_code, text, dict(response.headers))
-            except (httpx.TimeoutException, httpx.NetworkError) as exc:
-                last_error = exc
-                await asyncio.sleep(min(2 ** attempt, 20))
-        if last_error:
-            raise last_error
-        raise RuntimeError(f"Failed to fetch {url} after retries")
+                except (httpx.TimeoutException, httpx.NetworkError):
+                    if attempt == 3:
+                        raise
+                    await asyncio.sleep(2 ** attempt)
+            if redirects and result.status in {301, 302, 303, 307, 308}:
+                location = result.headers.get("location")
+                if not location:
+                    raise ValueError("Redirect without Location")
+                url = urljoin(url, location)
+                headers = {}
+                continue
+            if result.status < 300 and result.status != 204:
+                kind = result.headers.get("content-type", "").lower()
+                if kind and not any(x in kind for x in ("text/", "html", "xml", "json", "javascript")):
+                    raise ValueError("Unsupported response content type")
+            return result
+        raise ValueError("Too many redirects")
 
     async def _throttle(self):
-        delay = max(self.delay, self.robot_delay or 0.0)
-        async with self._request_gate:
-            elapsed = time.monotonic() - self._last_request_at
+        gates = _HOST_GATES.setdefault(asyncio.get_running_loop(), {})
+        gate = gates.setdefault(self.start_host, {"lock": asyncio.Lock(), "last": 0.0, "delay": 0.0})
+        async with gate["lock"]:
+            delay = gate["delay"] = max(self.delay, self.robot_delay, gate["delay"])
+            elapsed = time.monotonic() - gate["last"]
             if elapsed < delay:
                 await asyncio.sleep(delay - elapsed)
-            self._last_request_at = time.monotonic()
+            gate["last"] = time.monotonic()
 
-    def _looks_dynamic(self, html: str) -> bool:
-        if not html:
-            return False
-        soup = BeautifulSoup(html, "lxml")
-        text_len = len(soup.get_text(" ", strip=True))
-        anchors = len(soup.find_all("a", href=True))
-        scripts = len(soup.find_all("script"))
-        return bool(DYNAMIC_HINTS.search(html)) or (text_len < 250 and scripts >= 3 and anchors <= 2)
+    async def _load_robots(self, client):
+        result = await self._http_fetch_with_retry(client, urljoin(self.start_url, "/robots.txt"), {}, robots=False)
+        if result.status in {404, 410}:
+            return
+        if result.status != 200 or CHALLENGE.search(result.text):
+            raise ValueError(f"Cannot establish robots.txt policy: HTTP {result.status}")
+        parser = RobotFileParser()
+        parser.parse(result.text.splitlines())
+        self.robot_parser = parser
+        self.robot_delay = float(parser.crawl_delay(DEFAULT_USER_AGENT) or parser.crawl_delay("*") or 0)
+        rate = parser.request_rate(DEFAULT_USER_AGENT) or parser.request_rate("*")
+        if rate and rate.requests:
+            self.robot_delay = max(self.robot_delay, rate.seconds / rate.requests)
+        self.robot_sitemaps = parser.site_maps() or []
 
-    async def _enqueue(self, url: str, depth: int):
+    async def _discover_sitemap_urls(self, client):
+        discovered, visited = [], set()
+        for url in dict.fromkeys([*self.robot_sitemaps, urljoin(self.start_url, "/sitemap.xml")]):
+            await self._parse_sitemap(client, url, discovered, visited, 0)
+        return discovered
+
+    async def _parse_sitemap(self, client, url, discovered, visited, depth):
         url = canonicalize_url(url)
-        if not url or depth > self.max_depth or not self._allowed_url(url):
+        if not url or url in visited:
             return
-        if len(self.seen) >= self.max_pages:
+        if depth > 3 or len(visited) >= 50 or len(discovered) >= self.max_pages:
+            self.limited = True
             return
-        if url in self.seen:
-            return
-        self.seen.add(url)
-        await self.queue.put((url, depth))
-        await db.increment_job(self.job_id, pages_discovered=1)
-
-    def _allowed_url(self, url: str) -> bool:
+        visited.add(url)
         try:
-            parts = urlsplit(url)
-        except ValueError:
-            return False
-        if parts.scheme not in {"http", "https"}:
-            return False
-        host = parts.hostname or ""
-        if host.lower() != self.start_host.lower():
-            return False
-        lower_path = parts.path.lower()
-        if any(lower_path.endswith(ext) for ext in ASSET_EXTENSIONS):
-            return False
-        return True
-
-    async def _load_robots(self, client: httpx.AsyncClient):
-        robots_url = urljoin(self.start_url, "/robots.txt")
-        try:
-            response = await client.get(robots_url)
-            if response.status_code != 200:
+            result = await self._http_fetch_with_retry(client, url, {})
+            if result.status in {404, 410}:
                 return
-            parser = RobotFileParser()
-            parser.set_url(robots_url)
-            parser.parse(response.text.splitlines())
-            self.robot_parser = parser
-            delay = parser.crawl_delay(DEFAULT_USER_AGENT) or parser.crawl_delay("*")
-            self.robot_delay = float(delay) if delay is not None else None
-            for line in response.text.splitlines():
-                if line.lower().startswith("sitemap:"):
-                    candidate = line.split(":", 1)[1].strip()
-                    if candidate:
-                        self.robot_sitemaps.append(candidate)
-        except Exception:
-            self.robot_parser = None
-
-    async def _discover_sitemap_urls(self, client: httpx.AsyncClient) -> list[str]:
-        candidates = list(dict.fromkeys([*self.robot_sitemaps, urljoin(self.start_url, "/sitemap.xml")]))
-        discovered: list[str] = []
-        visited_sitemaps: set[str] = set()
-        for sitemap in candidates[:20]:
-            await self._parse_sitemap(client, sitemap, discovered, visited_sitemaps, depth=0)
-            if len(discovered) >= self.max_pages:
-                break
-        return discovered[: self.max_pages]
-
-    async def _parse_sitemap(self, client: httpx.AsyncClient, sitemap_url: str, discovered: list[str], visited: set[str], depth: int):
-        if depth > 3 or sitemap_url in visited or len(discovered) >= self.max_pages:
-            return
-        visited.add(sitemap_url)
-        if not self._allowed_url(sitemap_url) and (urlsplit(sitemap_url).hostname or "").lower() != self.start_host.lower():
-            return
-        try:
-            await self._throttle()
-            response = await client.get(sitemap_url)
-            if response.status_code != 200 or len(response.content) > MAX_BODY_BYTES:
-                return
-            root = etree.fromstring(response.content)
-            local = etree.QName(root).localname.lower()
-            locs = [clean_xml_text(x.text) for x in root.xpath("//*[local-name()='loc']") if clean_xml_text(x.text)]
-            if local == "sitemapindex":
-                for loc in locs[:1000]:
-                    await self._parse_sitemap(client, loc, discovered, visited, depth + 1)
-            else:
-                for loc in locs:
-                    url = canonicalize_url(loc)
-                    if self._allowed_url(url):
-                        discovered.append(url)
-                        if len(discovered) >= self.max_pages:
-                            break
-        except Exception:
-            return
-
-
-def canonicalize_url(url: str) -> str:
-    if not url:
-        return ""
-    try:
-        parts = urlsplit(url.strip())
-    except ValueError:
-        return ""
-    if parts.scheme not in {"http", "https"}:
-        return ""
-    query_items = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if k.lower() not in TRACKING_PARAMS]
-    query_items.sort()
-    path = re.sub(r"/{2,}", "/", parts.path or "/")
-    netloc = parts.netloc.lower()
-    return urlunsplit((parts.scheme.lower(), netloc, path, urlencode(query_items, doseq=True), ""))
-
-
-def clean_xml_text(value: str | None) -> str:
-    return (value or "").strip()
+            if result.status != 200:
+                raise ValueError(f"Sitemap HTTP {result.status}")
+            parser = etree.XMLParser(resolve_entities=False, no_network=True, load_dtd=False)
+            root = etree.fromstring(result.body, parser)
+            kind = etree.QName(root).localname
+            if kind not in {"sitemapindex", "urlset"}:
+                raise ValueError("Unrecognized sitemap root")
+            child = "sitemap" if kind == "sitemapindex" else "url"
+            for loc in root.xpath(f"./*[local-name()='{child}']/*[local-name()='loc']"):
+                candidate = canonicalize_url(urljoin(result.url, (loc.text or "").strip()))
+                if kind == "sitemapindex":
+                    await self._parse_sitemap(client, candidate, discovered, visited, depth + 1)
+                elif self._allowed_url(candidate) and candidate not in discovered:
+                    if len(discovered) >= self.max_pages:
+                        self.limited = True
+                        break
+                    discovered.append(candidate)
+        except Exception as exc:
+            await db.increment_job(self.job_id, errors=1)
+            await db.upsert_page(self.source_id, url, last_error=f"Sitemap: {exc}"[:1000])

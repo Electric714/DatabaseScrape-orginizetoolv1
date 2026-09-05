@@ -1,5 +1,67 @@
 # Database Scrape & Organize Tool
 
+## Audited foundation (September 2026)
+
+Read [AUDIT.md](AUDIT.md) for the engineering findings, verification, and remaining limits.
+This is a **single-process, local proof of concept**, with a tested bounded crawler.
+It is not a universal exhaustive extractor or a production law-office deployment.
+
+- Only the source hostname and public IP destinations on ports 80/443 are accepted.
+  DNS is pinned to the actual HTTP connection; redirects and browser resources use
+  the same boundary. Proxy environment settings are ignored.
+- Crawls use breadth-first depth barriers and a bounded frontier. Start URLs and
+  sitemap entries are depth-zero seeds. Page limits count selected HTML pages;
+  robots/sitemap requests and retries are additional, bounded network work.
+- A `partial` job means limits, denied pages, conflicts, parsing failures, or
+  rendering errors prevented completion. Inspect `/api/sources/{id}/errors`
+  for the latest retained page errors. `completed` means the configured traversal
+  finished without reported limits/errors, not that every entity on a site exists
+  in the database.
+- Cached pages refresh sightings and replay known links. Rendered DOMs do not use
+  HTTP-shell validators. Changing rendering mode invalidates validator reuse.
+- Records missing from a complete traversal are marked inactive and timestamped.
+  Partial/failed scans cannot declare records missing. Inactive means absent from
+  this traversal, not proof that a person or business no longer exists.
+- Name-only identities are scoped to the profile URL. Stable site IDs should be
+  supplied in `external_id`. Conflicting same-scan representations are reported
+  instead of silently accepting whichever concurrent fetch finishes last.
+- SQLite work runs on a dedicated thread; history updates are transactional.
+  One process may serve a database. Do not use multiple Uvicorn workers.
+- Browser rendering supports GET-based same-host pages and cookies within a scan.
+  Images/fonts/media, service workers, WebSockets, non-GET requests and external
+  resources are restricted. Some real applications will need explicit adapter
+  work. Rendering errors are surfaced.
+- CSV/XLSX text is formula-neutralized. Exports include structured extra data and
+  inactive state. More than 250,000 matches returns an explicit error; narrow the
+  filter. The GUI shows up to 250 results; the API supports offset pagination.
+
+Before upgrading an existing installation, stop the app and back up the SQLite
+database (including any WAL state using SQLite backup facilities). Startup migrates
+identity keys while retaining row IDs/history and invalidates old page caches.
+Run a full scan afterward. People already merged by the old heuristic cannot be
+reconstructed automatically.
+
+Keep the default loopback binding. There is no user authentication, role management,
+database encryption, or access audit trail. A shared deployment requires those
+controls plus TLS, retention rules, backups, and operational monitoring.
+
+### Verification
+
+```bash
+pip install -r requirements.txt
+python -m playwright install chromium
+pytest -q
+# PowerShell, to include actual browser + local-server GUI tests:
+$env:RUN_BROWSER_TESTS = "1"
+pytest -q
+# Linux/macOS:
+RUN_BROWSER_TESTS=1 pytest -q
+```
+
+Fixtures use an injected HTTP transport and a temporary local GUI server. They
+never disable the production public-IP policy through an API option. GitHub Actions
+runs the browser tests and a dependency advisory audit.
+
 A web-based crawler, organizer, change monitor, search tool, and exporter for **permitted public data sources**.
 
 The browser is only the GUI. Crawling, JavaScript rendering, parsing, normalization, persistence, scheduling, change detection, search, and exports run on the Python backend.
