@@ -35,10 +35,11 @@ def test_live_gui_smoke(database, monkeypatch):
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch()
             try:
-                page = browser.new_page()
+                page = browser.new_page(viewport={"width": 1440, "height": 1100}, device_scale_factor=1)
                 errors = []
                 page.on("pageerror", lambda error: errors.append(str(error)))
                 page.goto(f"http://127.0.0.1:{port}")
+                page.get_by_role("button", name="Add a website", exact=True).click()
                 page.locator("#sourceName").fill("GUI fixture")
                 page.locator("#sourceUrl").fill("https://fixture.test/")
                 page.locator("summary").click()
@@ -51,6 +52,46 @@ def test_live_gui_smoke(database, monkeypatch):
                 page.locator("#sourceFilter").select_option(label="GUI fixture")
                 page.wait_for_timeout(3500)
                 assert page.locator("#sourceFilter option:checked").inner_text() == "GUI fixture"
+                from app import activity
+                from playwright.sync_api import expect
+                activity.emit("ERROR", "Fixture connection error", error="Demonstration of a failed page")
+                expect(page.locator("#consoleFeed")).to_contain_text("Fixture connection error", timeout=10000)
+                page.locator('[data-log-level="ERROR"]').click()
+                assert page.locator("#consoleFeed .log-entry.INFO").count() == 0
+                page.locator("#logSearch").fill("no-such-log")
+                expect(page.locator("#consoleFeed")).to_contain_text("Nothing here matches")
+                page.locator("#logSearch").fill("")
+                page.locator('[data-log-level="all"]').click()
+                page.locator("#pauseLogs").click()
+                activity.emit("INFO", "Paused event fixture")
+                page.wait_for_timeout(3000)
+                assert "Paused event fixture" not in page.locator("#consoleFeed").inner_text()
+                page.locator("#pauseLogs").click()
+                expect(page.locator("#consoleFeed")).to_contain_text("Paused event fixture", timeout=10000)
+                page.locator("#snapshotButton").click()
+                expect(page.locator("#consoleFeed")).to_contain_text("Diagnostic snapshot captured", timeout=10000)
+                with page.expect_download() as saved:
+                    page.locator("#exportLogs").click()
+                import zipfile
+                with zipfile.ZipFile(saved.value.path()) as archive:
+                    assert "activity.json" in archive.namelist()
+                if os.getenv("UI_SCREENSHOTS"):
+                    from pathlib import Path
+                    directory = Path(os.environ["UI_SCREENSHOTS"])
+                    directory.mkdir(parents=True, exist_ok=True)
+                    page.evaluate("window.scrollTo(0,0)")
+                    page.screenshot(path=str(directory / "workspace-desktop.png"), full_page=True)
+                page.set_viewport_size({"width": 390, "height": 844})
+                assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+                if os.getenv("UI_SCREENSHOTS"):
+                    page.screenshot(path=str(directory / "workspace-mobile.png"), full_page=True)
+                page.route("**/api/**", lambda route: route.abort())
+                expect(page.locator("#health")).to_contain_text("Reconnecting", timeout=15000)
+                with page.expect_download() as saved:
+                    page.locator("#exportLogs").click()
+                import json
+                with open(saved.value.path(), encoding="utf-8") as file:
+                    assert "Backend unavailable" in json.load(file)["note"]
                 assert not errors
             finally:
                 browser.close()

@@ -109,6 +109,16 @@ def _sync_init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_records_address ON records(address);
             CREATE INDEX IF NOT EXISTS idx_jobs_source ON crawl_jobs(source_id, id DESC);
             CREATE INDEX IF NOT EXISTS idx_records_changed ON records(last_changed DESC, id DESC);
+            CREATE TABLE IF NOT EXISTS activity_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                level TEXT NOT NULL,
+                component TEXT NOT NULL,
+                message TEXT NOT NULL,
+                details_json TEXT NOT NULL DEFAULT '{}',
+                job_id INTEGER,
+                source_id INTEGER
+            );
             """
         )
         columns = {r["name"] for r in conn.execute("PRAGMA table_info(pages)")}
@@ -426,6 +436,31 @@ def _sync_page_errors(source_id: int) -> list[dict]:
         rows = conn.execute("SELECT url,last_error,last_crawled_at FROM pages WHERE source_id=? AND last_error IS NOT NULL ORDER BY last_crawled_at DESC LIMIT 200", (source_id,)).fetchall()
         return [dict(row) for row in rows]
 
+
+def _sync_add_event(level, component, message, details, job_id=None, source_id=None):
+    with closing(connect()) as conn:
+        cur = conn.execute("""INSERT INTO activity_events(created_at,level,component,message,details_json,job_id,source_id)
+            VALUES (?,?,?,?,?,?,?)""", (utcnow(), level, component, message, json.dumps(details), job_id, source_id))
+        conn.execute("DELETE FROM activity_events WHERE id <= ?", (cur.lastrowid - 5000,))
+        conn.commit()
+        return cur.lastrowid
+
+
+def _sync_list_events(after=0, limit=300):
+    with closing(connect()) as conn:
+        if after:
+            rows = conn.execute("SELECT * FROM activity_events WHERE id>? ORDER BY id LIMIT ?", (after, limit)).fetchall()
+        else:
+            rows = list(reversed(conn.execute("SELECT * FROM activity_events ORDER BY id DESC LIMIT ?", (limit,)).fetchall()))
+        items = []
+        for row in rows:
+            item = dict(row)
+            item["details"] = json.loads(item.pop("details_json"))
+            items.append(item)
+        newest = conn.execute("SELECT COALESCE(MAX(id),0) FROM activity_events").fetchone()[0]
+        return {"items": items, "cursor": items[-1]["id"] if items else after,
+                "latest": newest, "retention": 5000, "reset": after > newest}
+
 # SQLite and lock waits run off the event loop. One worker serializes local DB
 # operations; write transactions still protect read-modify-write across connections.
 _EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="crawler-db")
@@ -464,3 +499,4 @@ observe_page_records = _async_database(_sync_observe_page_records)
 touch_page_records = _async_database(_sync_touch_page_records)
 finish_observations = _async_database(_sync_finish_observations)
 page_errors = _async_database(_sync_page_errors)
+list_events = _async_database(_sync_list_events)

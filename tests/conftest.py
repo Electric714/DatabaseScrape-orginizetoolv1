@@ -7,7 +7,9 @@ from app.models import SourceCreate
 async def database(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
     await db.init_db()
-    return db
+    yield db
+    # Drain activity writes before the temporary database path is restored.
+    await db.stats()
 
 
 @pytest.fixture

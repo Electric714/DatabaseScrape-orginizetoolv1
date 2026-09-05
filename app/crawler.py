@@ -15,6 +15,7 @@ from bs4 import BeautifulSoup, UnicodeDammit
 from lxml import etree
 
 from . import database as db
+from . import activity
 from .adapters import adapter_for_url
 from .config import ASSET_EXTENSIONS, DEFAULT_TIMEOUT_SECONDS, DEFAULT_USER_AGENT, MAX_BODY_BYTES
 from .security import PublicTransport
@@ -156,6 +157,7 @@ class CrawlEngine:
         self.adapter = adapter_for_url(self.start_url)
 
     async def run(self):
+        activity.emit("INFO", "Scan started", source_id=self.source_id, job_id=self.job_id, url=self.start_url)
         await db.update_job(self.job_id, status="running", started_at=db.utcnow(), message="Preparing crawl")
         try:
             async with httpx.AsyncClient(
@@ -163,6 +165,7 @@ class CrawlEngine:
                 timeout=DEFAULT_TIMEOUT_SECONDS, headers={"User-Agent": DEFAULT_USER_AGENT},
             ) as client:
                 await self._load_robots(client)
+                activity.emit("INFO", "Crawl policy checked; discovering sitemap links", source_id=self.source_id, job_id=self.job_id)
                 frontier = [self.start_url, *await self._discover_sitemap_urls(client)]
                 # Level barriers prevent a fast deep path from hiding a shorter path.
                 for depth in range(self.max_depth + 1):
@@ -194,14 +197,19 @@ class CrawlEngine:
                         self.limited = True
                 job = await db.get_job(self.job_id)
                 complete = not self.limited and not job["errors"]
+                activity.emit("INFO" if complete else "WARNING", "Scan completed" if complete else "Scan finished with limits or errors",
+                              source_id=self.source_id, job_id=self.job_id, pages=self.processed, errors=job["errors"],
+                              records_new=job["records_new"], records_updated=job["records_updated"])
                 if complete:
                     await db.finish_observations(self.source_id, self.job_id)
                 await db.update_job(self.job_id, status="completed" if complete else "partial", finished_at=db.utcnow(),
                     message=f"{self.processed} pages processed. " + ("Crawl boundary exhausted." if complete else "Limits or errors prevented a complete scan; missing records were not marked inactive."))
         except asyncio.CancelledError:
+            activity.emit("WARNING", "Scan cancelled", source_id=self.source_id, job_id=self.job_id)
             await db.update_job(self.job_id, status="cancelled", finished_at=db.utcnow(), message="Crawl cancelled")
             raise
         except Exception as exc:
+            activity.emit("ERROR", "Scan failed", source_id=self.source_id, job_id=self.job_id, error=str(exc))
             await db.increment_job(self.job_id, errors=1)
             await db.update_job(self.job_id, status="failed", finished_at=db.utcnow(), message=str(exc)[:1000])
             raise
@@ -210,9 +218,13 @@ class CrawlEngine:
             await db.mark_source_scanned(self.source_id)
 
     async def _process_safely(self, client, url):
+        activity.emit("INFO", "Fetching page", source_id=self.source_id, job_id=self.job_id, url=url)
         try:
-            return await self._process_url(client, url)
+            links = await self._process_url(client, url)
+            activity.emit("INFO", "Page processed", source_id=self.source_id, job_id=self.job_id, url=url, links=len(links))
+            return links
         except Exception as exc:
+            activity.emit("ERROR", "Page could not be processed", source_id=self.source_id, job_id=self.job_id, url=url, error=str(exc))
             await db.increment_job(self.job_id, errors=1)
             await db.upsert_page(self.source_id, url, last_error=str(exc)[:1000])
             return []
@@ -278,10 +290,12 @@ class CrawlEngine:
         result = await self._http_fetch_with_retry(client, url, headers)
         if result.status == 304:
             result.not_modified = True
+            activity.emit("INFO", "Unchanged page; reusing saved links and sightings", job_id=self.job_id, url=url)
             return result
         if result.status == 200 and not CHALLENGE.search(result.text) and (
             self.render_mode == "browser" or self.render_mode == "auto" and self._looks_dynamic(result.text)
         ):
+            activity.emit("INFO", "Rendering JavaScript page", job_id=self.job_id, url=result.url)
             return await self.renderer.fetch(client, result.url)
         return result
 
@@ -337,6 +351,7 @@ class CrawlEngine:
                         pass
                     if wait > 60:
                         raise ValueError("Server requested a longer retry delay; rescan later")
+                    activity.emit("WARNING", "Temporary response; retrying after a delay", job_id=self.job_id, url=url, status=result.status, seconds=wait, attempt=attempt + 1)
                     await asyncio.sleep(wait)
                 except (httpx.TimeoutException, httpx.NetworkError):
                     if attempt == 3:
@@ -419,3 +434,4 @@ class CrawlEngine:
         except Exception as exc:
             await db.increment_job(self.job_id, errors=1)
             await db.upsert_page(self.source_id, url, last_error=f"Sitemap: {exc}"[:1000])
+            activity.emit("ERROR", "Sitemap could not be read", job_id=self.job_id, source_id=self.source_id, url=url, error=str(exc))

@@ -1,0 +1,47 @@
+PUBLIC DATA MONITOR
+===================
+
+WINDOWS: OPEN THIS FIRST
+
+1. Right-click the downloaded ZIP and choose "Extract All".
+   Put the extracted folder somewhere you can keep it, such as Documents.
+   Do not run the program from inside the ZIP preview.
+
+2. Double-click:
+
+       1 - START Public Data Monitor.cmd
+
+3. Wait for first-time setup. It downloads a private Python environment,
+   the required packages and Chromium. This can take several minutes.
+   You do not need to install Python or edit requirements.txt.
+   Internet access is required for setup.
+
+4. Your browser opens the app automatically. Add a source and start a scan.
+   Keep the launcher window open while using the app.
+   Press Ctrl+C in that window to stop the app safely.
+
+NEXT TIME
+Double-click the same START file. Completed setup is reused.
+
+IF SOMETHING GOES WRONG
+Use the Activity console in the app. Click "Capture snapshot", then
+"Export report". You can share that ZIP when asking for help.
+If the app cannot open, check logs\setup.log or double-click
+"2 - REPAIR Setup.cmd". Repair keeps your collected records.
+
+WHERE THINGS LIVE
+data\       Your collected records and saved activity.
+logs\       Setup and startup troubleshooting.
+.runtime\   Private Python, packages and browser (created automatically).
+app\        Application code; you do not need to open it.
+scripts\    Launcher support files; use the START file above.
+docs\       Technical documentation and audit.
+tests\      Developer checks; not needed to start the program.
+
+NOTES
+Windows 10/11 (64-bit x64 or ARM64) is the one-click path.
+No administrator account or global Python changes are needed.
+Company-managed PCs may require IT to allow the downloads/scripts.
+Do not disable antivirus or organization security policies.
+For macOS/Linux, see README.md.
+Keep the full extracted folder together. Back up data before upgrading.

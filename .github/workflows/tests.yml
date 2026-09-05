@@ -5,6 +5,28 @@ on:
   pull_request:
 
 jobs:
+  windows-setup:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: downloaded workspace
+      - name: First setup, reuse, and repair preserve data
+        shell: powershell
+        working-directory: downloaded workspace
+        run: |
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/start-windows.ps1 -SetupOnly
+          if ($LASTEXITCODE -ne 0) { throw 'First setup failed' }
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/start-windows.ps1 -SetupOnly
+          if ($LASTEXITCODE -ne 0) { throw 'Reuse failed' }
+          New-Item -ItemType Directory -Force data | Out-Null
+          Set-Content data/preserve-check.txt 'preserve me'
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/start-windows.ps1 -Repair -SetupOnly
+          if ($LASTEXITCODE -ne 0) { throw 'Repair failed' }
+          if ((Get-Content data/preserve-check.txt) -ne 'preserve me') { throw 'Data was changed' }
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 10

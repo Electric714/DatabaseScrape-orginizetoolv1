@@ -3,6 +3,7 @@ import csv
 import io
 import json
 import logging
+import hashlib
 from urllib.parse import urlsplit
 from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -17,6 +18,7 @@ from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
 
 from . import database as db
+from . import activity
 from .config import BASE_DIR
 from .crawler import CrawlEngine, canonicalize_url
 from .security import validate_public_url
@@ -41,6 +43,7 @@ async def _launch_scan(source_id: int, force_full: bool = False) -> dict:
     if running:
         return running
     job_id = await db.create_job(source_id, force_full)
+    activity.emit("INFO", "Scan queued", source_id=source_id, job_id=job_id, mode="full" if force_full else "incremental")
     engine = CrawlEngine(source, job_id, force_full=force_full)
     task = asyncio.create_task(engine.run(), name=f"crawl-job-{job_id}")
     TASKS[job_id] = task
@@ -78,7 +81,7 @@ async def scheduler_loop():
                 if due:
                     await launch_scan(source["id"], force_full=False)
         except Exception:
-            logging.exception("Scheduler iteration failed")
+            logging.getLogger("app.scheduler").exception("Scheduler iteration failed")
         await asyncio.sleep(30)
 
 
@@ -87,6 +90,8 @@ async def lifespan(_app: FastAPI):
     global SCHEDULER_TASK
     with single_instance():
         await db.init_db()
+        activity.install()
+        activity.emit("INFO", "Workspace started. Ready to monitor public sources.", version=activity.APP_VERSION)
         await db.mark_interrupted_jobs()
         SCHEDULER_TASK = asyncio.create_task(scheduler_loop(), name="source-scheduler")
         try:
@@ -99,10 +104,12 @@ async def lifespan(_app: FastAPI):
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
+            activity.emit("INFO", "Workspace stopped. Active scans have been closed safely.")
+            await db.list_events(limit=1)
 
 
 
-app = FastAPI(title="Database Scrape & Organize Tool", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Public Data Monitor", version=activity.APP_VERSION, lifespan=lifespan)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "[::1]", "testserver"])
 
 
@@ -111,7 +118,14 @@ async def local_security(request, call_next):
     origin = request.headers.get("origin")
     if request.method not in {"GET", "HEAD", "OPTIONS"} and origin and origin != str(request.base_url).rstrip("/"):
         return JSONResponse({"detail": "Cross-origin mutation forbidden"}, status_code=403)
-    response = await call_next(request)
+    try:
+        response = await call_next(request)
+    except Exception:
+        logging.getLogger("app.api").exception("Request failed: %s %s", request.method, request.url.path)
+        return JSONResponse({"detail": "Something went wrong. Open Activity console and export diagnostics."}, status_code=500)
+    if response.status_code >= 400:
+        activity.emit("WARNING" if response.status_code < 500 else "ERROR", "Request could not be completed",
+                      method=request.method, path=request.url.path, status=response.status_code)
     response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
@@ -130,7 +144,27 @@ async def home():
 
 @app.get("/api/health")
 async def health():
-    return {"ok": True, "version": "0.1.0"}
+    return {"ok": True, "version": activity.APP_VERSION, "application": "public-data-monitor",
+            "workspace": hashlib.sha256(str(db.DB_PATH.resolve()).encode()).hexdigest()[:16]}
+
+
+@app.get("/api/activity")
+async def activity_events(after: int = Query(0, ge=0), limit: int = Query(300, ge=1, le=1000)):
+    return await db.list_events(after, limit)
+
+
+@app.post("/api/activity/snapshot")
+async def activity_snapshot():
+    counts = await db.stats()
+    activity.emit("INFO", "Diagnostic snapshot captured by operator", **counts)
+    return {"ok": True, "counts": counts}
+
+
+@app.get("/api/activity/export")
+async def activity_export():
+    activity.emit("INFO", "Diagnostic report exported")
+    return StreamingResponse(io.BytesIO(await activity.bundle()), media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="public-data-monitor-diagnostics.zip"'})
 
 
 @app.get("/api/stats")
@@ -152,7 +186,9 @@ async def post_source(payload: SourceCreate):
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     try:
-        return await db.create_source(data)
+        source = await db.create_source(data)
+        activity.emit("INFO", "Source added", source_id=source["id"], url=source["start_url"])
+        return source
     except Exception as exc:
         if "UNIQUE constraint failed" in str(exc):
             raise HTTPException(status_code=409, detail="That start URL already exists") from exc
@@ -179,6 +215,7 @@ async def _delete_source(source_id: int):
         raise HTTPException(status_code=409, detail="Stop/wait for the active crawl before deleting this source")
     if not await db.delete_source(source_id):
         raise HTTPException(status_code=404, detail="Source not found")
+    activity.emit("WARNING", "Source and its collected records deleted", source_id=source_id)
 
 
 @app.post("/api/sources/{source_id}/scan")
