@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Public Data Monitor</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <div>
+        <div class="eyebrow">DATABASE SCRAPE & ORGANIZE TOOL</div>
+        <h1>Public Data Monitor</h1>
+        <p>Deep crawl permitted public directories, normalize records, track changes, search everything, and export it cleanly.</p>
+      </div>
+      <div id="health" class="pill">Checking backend…</div>
+    </header>
+
+    <section class="stats">
+      <div class="stat"><span>Sources</span><strong id="statSources">0</strong></div>
+      <div class="stat"><span>Records</span><strong id="statRecords">0</strong></div>
+      <div class="stat"><span>Changed 24h</span><strong id="statChanged">0</strong></div>
+      <div class="stat"><span>Running jobs</span><strong id="statRunning">0</strong></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <div><h2>Add a source</h2><p>Start with the public directory root or search/index page.</p></div>
+      </div>
+      <form id="sourceForm" class="source-form">
+        <label>Name<input id="sourceName" required placeholder="Wisconsin directory"></label>
+        <label class="grow">Start URL<input id="sourceUrl" type="url" required placeholder="https://example.gov/directory"></label>
+        <button class="primary" type="submit">Add source</button>
+        <details class="advanced">
+          <summary>Advanced crawl settings</summary>
+          <div class="advanced-grid">
+            <label>Max pages<input id="maxPages" type="number" min="1" value="5000"></label>
+            <label>Max depth<input id="maxDepth" type="number" min="0" value="12"></label>
+            <label>Concurrency<input id="concurrency" type="number" min="1" max="32" value="6"></label>
+            <label>Delay (ms)<input id="delayMs" type="number" min="0" value="350"></label>
+            <label>Rendering<select id="renderMode"><option value="auto">Auto</option><option value="http">HTTP only</option><option value="browser">Browser</option></select></label>
+            <label>Auto scan<select id="autoScan"><option value="false">Off</option><option value="true">On</option></select></label>
+            <label>Interval (minutes)<input id="intervalMinutes" type="number" min="5" value="60"></label>
+            <label>robots.txt<select id="respectRobots"><option value="true">Respect</option><option value="false">Operator-authorized override</option></select></label>
+          </div>
+        </details>
+      </form>
+      <div id="formMessage" class="message"></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <div><h2>Sources</h2><p>Manual scans are exhaustive within the configured crawl boundary. Later scans reuse cache metadata and content hashes.</p></div>
+        <button id="refreshSources" class="ghost">Refresh</button>
+      </div>
+      <div id="sources" class="source-grid empty">No sources yet.</div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><div><h2>Scan activity</h2><p>Live crawl progress and recent jobs.</p></div></div>
+      <div id="jobs" class="jobs empty">No crawl jobs yet.</div>
+    </section>
+
+    <section class="panel records-panel">
+      <div class="panel-head records-head">
+        <div><h2>Database</h2><p id="recordCount">0 matching records</p></div>
+        <div class="export-row">
+          <button data-export="csv" class="ghost">CSV</button>
+          <button data-export="xlsx" class="ghost">Excel</button>
+          <button data-export="json" class="ghost">JSON</button>
+        </div>
+      </div>
+      <div class="filters">
+        <input id="search" placeholder="Search name, company, phone, address, date, URL…">
+        <select id="sourceFilter"><option value="">All sources</option></select>
+        <button id="searchBtn" class="primary">Search</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Name</th><th>Company</th><th>Phone</th><th>Address</th><th>Date</th><th>Source</th><th>Changed</th></tr></thead>
+          <tbody id="records"><tr><td colspan="7" class="muted">No records yet.</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+  <script src="/static/app.js"></script>
+</body>
+</html>
