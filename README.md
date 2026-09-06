@@ -1,8 +1,8 @@
-# Paralegal Research Desk
+# Paralegal Database Tool
 
-This project is being built for a working paralegal: collect relevant public records from **six designated research websites**, keep them organized in a **local searchable database**, and quickly find business, ownership, address, and regulatory information needed for legal-document research.
+This project is a **Paralegal Database Tool** for maintaining and updating a law firm's contractor/bidder due-diligence database. It combines the firm's existing 30-column bidder database with targeted research against **six designated public-record websites**, preserves the source evidence behind every collected finding, and gives a paralegal a controlled review step before new information changes the approved master database.
 
-The central workflow is **select the research sites → collect their records → search the saved database → inspect the original source → export the relevant results**.
+The central workflow is **import the existing bidder CSV → run source-specific contractor queries → collect only the relevant public-record findings → compare those findings with the approved master → review highlighted differences → approve or dismiss updates → search/export the current master database**.
 
 ## Bidder database structure
 
@@ -12,7 +12,7 @@ The user-facing database and CSV/Excel/JSON exports now follow the law firm's su
 
 The crawler still keeps internal source URL, collection timestamps, generic contact details, page evidence, and change history underneath those 30 fields. That provenance is deliberately not added as extra columns to the bidder export.
 
-The generic extractor recognizes the exact field names above plus common human-readable label variants. Fields a website does not provide remain blank until that source's adapter can populate them. The six real website adapters will determine the authoritative meaning and mapping for DFI, workers' compensation, OSHA, debarment, courts, DWD, BBB, tax liability, and other compliance fields.
+The generic extractor recognizes the exact field names above plus common human-readable label variants, but it is only a fallback. The production collector is intentionally **query-focused**: each of the six real website adapters should submit the contractor/company identifiers appropriate to that source, follow only the result/detail/pagination paths needed for that lookup, and map only that source's authoritative findings into the relevant bidder fields. The six adapters will determine the real query inputs, result matching rules, pagination, and authoritative mapping for DFI, workers' compensation, OSHA, debarment, courts, DWD, BBB, tax liability, and other compliance fields.
 
 A blank compliance field means **unknown or not supplied by that source**, not a clean record. Automated adapters must preserve source wording rather than infer legal conclusions from missing data.
 
@@ -34,12 +34,14 @@ Blank values from a website never erase an existing master value. Dismissed find
 
 The master table can be searched and exported in the exact 30-column CSV, Excel, or JSON format expected by the existing bidder database.
 
-## The six websites
+## Query-focused source integrations
 The six website names and URLs are **pending**. The interface has six numbered positions ready for them, clearly marked as not yet configured.
 
-The local database, search, exports, and general webpage collector are in place. Once the actual websites are supplied, each one needs its search forms, navigation, pagination, and field mappings connected and checked against real examples.
+The master database, comparison/review workflow, exports, crawl engine, and generic fallback extractor are in place. What is **not finished yet** is the site-specific query logic. Once the actual sites are supplied, each adapter must be tested against real examples and should define: the contractor/company query inputs; search-form or public endpoint behavior; result matching and identity rules; pagination/detail-page navigation; which bidder fields that site is authoritative for; and exactly what constitutes a positive, negative, unknown, or historical finding.
 
-**Searching saved records is a local database search.** Refreshing a configured site runs its collector. Live name/business queries through each site's own search form require that site's integration.
+A broad same-host crawl remains useful for discovery and as a fallback, but the intended law-firm workflow is **not** to indiscriminately scrape every page. Production adapters should prioritize targeted queries for the contractors already in the master database, plus narrowly scoped discovery where the source supports it.
+
+**Searching saved bidder records is local database search.** Collecting from a configured site will become a source-specific contractor lookup once that site's adapter is implemented.
 
 The interface and record schema follow this workflow. Collection, search, and exports keep source evidence attached to each result. Current collection handles supported webpage records; PDF text extraction and OCR are not implemented.
 
@@ -55,9 +57,10 @@ Later launches reuse the environment. To stop, press **Ctrl+C** in the launcher 
 If setup fails, run **2 - REPAIR Setup.cmd**, then start again. Repair preserves your database. Setup details are in **logs/setup.log**. If company policy blocks scripts or downloads, ask your IT administrator.
 
 ## Your workspace
-- **Research websites:** six visible site positions, with Collect records and Update configured sites controls. Edit settings to adjust scheduling or limits without removing saved records.
-- **Collection:** update configured sources and follow progress and errors.
-- **Bidder database:** review the exact 30-column law-firm layout, search across saved source data, filter by source, inspect provenance, and export the same 30-column structure as CSV, Excel, or JSON. Open a contractor name to review source wording, links, and collection dates.
+- **Master bidder database:** upload the firm's existing CSV, search the approved 30-column database, and export the current master as CSV, Excel, or JSON.
+- **Research websites:** six visible source positions ready for source-specific contractor-query adapters. Edit collection settings without removing saved records.
+- **Collection:** run targeted source lookups, retain raw source evidence, and follow progress/errors.
+- **Comparison review:** compare source findings against the approved master, see old values in red and newly found values in green, then approve or dismiss each proposed change.
 - **Activity console:** follow progress, filter warnings/errors, search, pause, and jump to the latest event.
 
 To share a problem, reproduce it, click **Capture snapshot**, then **Export report**. This downloads a diagnostic ZIP. If the server is unavailable, export downloads the visible browser logs as JSON.
@@ -88,7 +91,7 @@ Install Python 3.11 or newer, then run **bash scripts/start-unix.sh** from the e
 - [Engineering audit and limitations](docs/AUDIT.md)
 - [Interface, logging, and setup details](docs/INTERFACE-AND-SETUP.md)
 
-This remains a single-process local proof of concept. A completed scan means the configured traversal finished, not that every possible record has been found. Use permitted public sources.
+This remains a single-process local proof of concept. The database/review workflow is substantially implemented; the six source integrations still require real-site adapters before collection can be considered production-ready. A completed generic scan means the configured traversal finished, not that every relevant legal/public record has been found. Use only permitted public sources.
 
 
 

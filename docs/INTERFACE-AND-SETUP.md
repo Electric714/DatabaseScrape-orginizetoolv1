@@ -1,18 +1,9 @@
 # Interface and setup
 
-## Paralegal research workflow
-The desk now puts the local research database first. Six website positions are
-reserved until the actual source names and URLs are supplied. Collect records
-refreshes one configured source; Update configured sites queues their collectors.
-These actions save webpage records locally. They do not yet submit names to the
-six websites' search forms, nor extract text from PDFs.
+## Paralegal Database Tool workflow
+The tool now puts the approved master bidder database first. The existing 30-column CSV can be imported, while collected website records remain separate source evidence until a paralegal approves a proposed change. Six website positions are reserved until the actual source names and URLs are supplied. The generic collector can traverse a configured site, but the six production adapters do not yet submit contractor/company queries to each site's real search form or public endpoint.
 
-Search supports business, person, owner, street address, and location fields plus
-source and source-reported OSHA status filters. Filters also apply to exports.
-The record detail view retains raw OSHA wording, provenance links, timestamps,
-and collection presence. Unknown means the source did not provide a recognized status;
-it is never converted into a clean violation record. Old saved records remain
-available after the additive database update.
+The master view searches the firm's bidder fields and exports the approved 30-column database. The comparison workspace shows current values and newly collected values side by side and requires explicit approval before changing the master. Source evidence, provenance links, timestamps, and collection history remain separate from the flattened bidder export. Blank or missing source data remains unknown and never clears a populated master field automatically.
 
 The frontend uses only local assets: a mist background, teal navigation, rounded panels, an orbital illustration, and a dark activity console. It adapts to narrow screens and supports reduced motion and keyboard focus. Source removal requires confirmation; records are paginated in batches of 50.
 

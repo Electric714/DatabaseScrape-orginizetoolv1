@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#143d42">
-  <title>Paralegal Research Desk · Local records</title>
+  <title>Paralegal Database Tool · Bidder research and updates</title>
   <link rel="icon" href="/static/mark.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/styles.css">
 </head>
@@ -12,8 +12,8 @@
 <a class="skip-link" href="#recordsSection">Skip to local records</a>
 <div class="ambient" aria-hidden="true"></div>
 <aside class="sidebar">
-  <a class="brand" href="#workspace"><img src="/static/mark.svg" alt="" width="40" height="40"><span>Paralegal<br><strong>Research Desk</strong></span></a>
-  <div class="workspace-label">RESEARCH WORKSPACE</div>
+  <a class="brand" href="#workspace"><img src="/static/mark.svg" alt="" width="40" height="40"><span>Paralegal<br><strong>Database Tool</strong></span></a>
+  <div class="workspace-label">DATABASE WORKSPACE</div>
   <nav aria-label="Research navigation">
     <a href="#recordsSection" class="nav-link active"><span class="nav-icon" aria-hidden="true">⌕</span> Local records</a>
     <a href="#sourceSection" class="nav-link"><span class="nav-icon" aria-hidden="true">◎</span> Research sites <span id="navSources" class="nav-count">0/6</span></a>
@@ -21,31 +21,31 @@
     <a href="#consoleSection" class="nav-link"><span class="nav-icon" aria-hidden="true">⌘</span> Activity console</a>
   </nav>
   <div class="sidebar-bottom">
-    <div class="local-badge"><span class="status-dot"></span> Local research database</div>
+    <div class="local-badge"><span class="status-dot"></span> Local paralegal database</div>
     <p>Collected records are saved on this computer and remain searchable after a restart.</p>
-    <button class="help-link" id="helpButton">How to use this desk <span aria-hidden="true">↗</span></button>
-    <div class="version">RESEARCH DESK <span id="appVersion">0.4</span></div>
+    <button class="help-link" id="helpButton">How to use this tool <span aria-hidden="true">↗</span></button>
+    <div class="version">DATABASE TOOL <span id="appVersion">0.4</span></div>
   </div>
 </aside>
 <main id="workspace">
   <header class="topbar">
-    <div class="breadcrumb">Paralegal workspace <span>/</span> Research</div>
+    <div class="breadcrumb">Paralegal workspace <span>/</span> Database</div>
     <div class="topbar-actions"><span id="lastSync">Connecting…</span><span class="connection" id="health"><i></i><span>Connecting</span></span></div>
   </header>
   <section class="hero research-hero" aria-labelledby="deskTitle">
     <div>
-      <div class="eyebrow"><span></span> BUSINESS &amp; PUBLIC RECORD RESEARCH</div>
-      <h1 id="deskTitle">The details you need.<br><em>The sources behind them.</em></h1>
-      <p>Find businesses, owners, people, addresses, and reported OSHA information in one organized local database.</p>
-      <div class="hero-actions"><button class="button primary" id="findRecords"><span aria-hidden="true">⌕</span> Search local records</button><button class="button subtle" id="reviewOsha">Review OSHA findings</button></div>
+      <div class="eyebrow"><span></span> CONTRACTOR DUE-DILIGENCE DATABASE</div>
+      <h1 id="deskTitle">One approved database.<br><em>The evidence behind every update.</em></h1>
+      <p>Maintain the firm's bidder database, run targeted public-record research, compare new findings, and approve only the updates that belong in the master.</p>
+      <div class="hero-actions"><button class="button primary" id="findRecords"><span aria-hidden="true">⌕</span> Search bidder database</button><button class="button subtle" id="reviewOsha">Review OSHA findings</button></div>
     </div>
     <div class="research-flow" aria-label="Research workflow">
       <span class="flow-label">YOUR WORKFLOW</span>
-      <div><span class="flow-number">1</span><p><strong>Collect from your sites</strong><small>Six research sites to be configured</small></p></div>
+      <div><span class="flow-number">1</span><p><strong>Query your research sites</strong><small>Target contractors across six public sources</small></p></div>
       <span class="flow-line" aria-hidden="true"></span>
-      <div><span class="flow-number">2</span><p><strong>Search saved records</strong><small>Business, owner, name, or address</small></p></div>
+      <div><span class="flow-number">2</span><p><strong>Compare with the master</strong><small>Highlight changed fields and new contractors</small></p></div>
       <span class="flow-line" aria-hidden="true"></span>
-      <div><span class="flow-number">3</span><p><strong>Review the evidence</strong><small>Open the source and export results</small></p></div>
+      <div><span class="flow-number">3</span><p><strong>Approve database updates</strong><small>Keep the source evidence and export the master</small></p></div>
     </div>
   </section>
   <section class="metrics" aria-label="Research database totals">
@@ -119,7 +119,7 @@
       <div class="workspace-note"><span aria-hidden="true">✧</span><p>Every finding needs context.<br><strong>Keep its source within reach.</strong></p></div>
     </aside>
   </div>
-  <footer class="page-footer"><span>Paralegal Research Desk</span><span>Collect · Organize · Search · Review the source</span></footer>
+  <footer class="page-footer"><span>Paralegal Database Tool</span><span>Collect · Organize · Search · Review the source</span></footer>
 </main>
 <dialog id="sourceDialog" class="modal" aria-labelledby="sourceDialogTitle">
   <div class="modal-top"><span class="section-kicker" id="sourceSlotLabel">SET UP A RESEARCH SITE</span><button class="close-button" data-close="sourceDialog" aria-label="Close site setup">×</button></div>

@@ -1,6 +1,6 @@
 @echo off
 setlocal
-title Repair Paralegal Research Desk
+title Repair Paralegal Database Tool
 cd /d "%~dp0"
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\start-windows.ps1" -Repair -SetupOnly
 echo.

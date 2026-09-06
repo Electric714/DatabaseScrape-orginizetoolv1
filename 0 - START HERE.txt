@@ -1,4 +1,4 @@
-PARALEGAL RESEARCH DESK
+PARALEGAL DATABASE TOOL
 ===================
 
 WINDOWS: OPEN THIS FIRST
@@ -16,16 +16,17 @@ WINDOWS: OPEN THIS FIRST
    You do not need to install Python or edit requirements.txt.
    Internet access is required for setup.
 
-4. Your browser opens the Paralegal Research Desk automatically.
+4. Your browser opens the Paralegal Database Tool automatically.
    Keep the launcher window open while using the app.
    Press Ctrl+C in that window to stop the app safely.
 
-RESEARCH WORKFLOW
+DATABASE WORKFLOW
+Upload the firm's existing bidder CSV to create the approved master database.
 Set up the six research websites when their names and URLs are available.
-Choose Collect records to save source information into the local database.
-Search business names, people, owners, locations and addresses in saved records.
-Review source-reported OSHA findings and open the original source for context.
-Export matching records for your research. Missing OSHA data means unknown.
+Collect source evidence, then compare it against the approved master database.
+Review highlighted proposed changes and approve only the updates that belong.
+Search or export the current 30-column bidder database at any time.
+Missing source data means unknown and does not erase an existing master value.
 
 NEXT TIME
 Double-click the same START file. Completed setup is reused.
