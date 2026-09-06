@@ -90,6 +90,7 @@ function recordParams(extra = {}) {
   return params;
 }
 const OSHA_LABELS = {open: 'Open — source reported', closed: 'Closed — source reported', none_reported: 'None reported by source', unknown: 'Not reported / unknown'};
+const BIDDER_COLUMNS = ["id","contractor_name","related_companies","address_1","city","state","zip","additional_address","additional_address_city","additional_address_state","additional_address_zip","dfi","wc","wc_date","osha_severe_violations","years","osha","state_federal_debarment","mndol_ineligibility","public_works_projects_budget_time_quality_complaint","federal_court","circuit_court","ccap_show150","environmental_violations","prevailing_wage_violations","dwd","dwd_substance_abuse_plan","better_business_bureau_complaints","misc_violations","tax_liability"];
 function oshaBadge(record) {
   const status = Object.hasOwn(OSHA_LABELS, record.osha_status) ? record.osha_status : 'unknown';
   return '<span class="osha-badge ' + status + '">' + OSHA_LABELS[status] + '</span>';
@@ -97,16 +98,25 @@ function oshaBadge(record) {
 async function loadRecords() {
   const sequence = ++state.recordSequence;
   const params = recordParams({limit: PAGE_SIZE, offset: state.offset});
-  const data = await api('/api/records?' + params);
+  const data = await api('/api/bidder-records?' + params);
   if (sequence !== state.recordSequence) return;
   state.total = data.total;
   if (state.offset && state.offset >= data.total) { state.offset = 0; return loadRecords(); }
   const filtered = params.get('q') || params.get('source_id') || params.get('osha_status');
-  $('recordCount').textContent = data.total.toLocaleString() + ' saved records' + (filtered ? ' matching your filters.' : ' in your local research database.');
+  $('recordCount').textContent = data.total.toLocaleString() + ' bidder database records' + (filtered ? ' matching your filters.' : ' saved locally.');
   $('pageInfo').textContent = data.total ? (state.offset + 1) + '–' + (state.offset + data.items.length) + ' of ' + data.total.toLocaleString() : 'No matching saved records';
   $('prevPage').disabled = state.offset === 0;
   $('nextPage').disabled = state.offset + PAGE_SIZE >= data.total;
-  $('records').innerHTML = data.items.length ? data.items.map(r => '<tr><td><strong>' + esc(r.company || 'Not reported') + '</strong>' + (!r.active ? '<span class="tag partial">Not seen recently</span>' : '') + '</td><td>' + esc(r.name || 'Not reported') + '</td><td>' + esc(r.owner || 'Not reported') + '</td><td>' + esc(r.address || 'Not reported') + (r.location ? '<small>' + esc(r.location) + '</small>' : '') + '</td><td>' + oshaBadge(r) + '</td><td><a href="' + esc(safeUrl(r.source_url)) + '" target="_blank" rel="noreferrer">' + esc(r.source_name) + ' ↗</a><small>Collected ' + esc(humanDate(r.last_seen)) + '</small><button class="record-button" data-record="' + r.id + '" aria-label="View record: ' + esc(r.company || r.name || r.owner || 'record ' + r.id) + '">View record</button></td></tr>').join('') : '<tr><td colspan="6" class="table-empty"><strong>' + (filtered ? 'No saved records match these filters.' : 'Your local research database is ready.') + '</strong><p>' + (filtered ? 'Try another term or clear the filters. This search only checks records already collected.' : 'Set up a research site below and choose Collect records. Business, owner, address, and reported OSHA information will be organized here when available.') + '</p></td></tr>';
+  $('records').innerHTML = data.items.length ? data.items.map(r => {
+    const cells = BIDDER_COLUMNS.map(column => {
+      const value = r[column] ?? '';
+      if (column === 'contractor_name') {
+        return '<td><button class="record-button bidder-record-link" data-record="' + esc(r._record_id) + '" aria-label="View source evidence for ' + esc(value || 'this contractor') + '">' + esc(value || '—') + '</button></td>';
+      }
+      return '<td>' + esc(value === '' ? '—' : value) + '</td>';
+    }).join('');
+    return '<tr>' + cells + '</tr>';
+  }).join('') : '<tr><td colspan="' + BIDDER_COLUMNS.length + '" class="table-empty"><strong>' + (filtered ? 'No bidder records match these filters.' : 'Your bidder database is ready.') + '</strong><p>' + (filtered ? 'Try another term or clear the filters.' : 'Set up a research site below and choose Collect records. Fields that a source does not provide will remain blank.') + '</p></td></tr>';
 }
 async function viewRecord(id) {
   const sequence = ++state.detailSequence;
