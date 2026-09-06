@@ -261,12 +261,10 @@ class OshaEstablishmentAdapter:
                 if name_index >= len(cells):
                     continue
                 candidate_name = cells[name_index].get_text(" ", strip=True)
-                detail = row.find("a", href=True)
+                detail = next((a for a in row.find_all("a", href=True) if urlsplit(urljoin(url, a["href"])).path.lower() == OSHA_DETAIL_PATH), None)
                 if not detail:
                     continue
                 detail_url = urljoin(url, detail["href"])
-                if urlsplit(detail_url).path.lower() != OSHA_DETAIL_PATH:
-                    continue
                 inspection_id = _inspection_id(detail_url)
                 if not inspection_id:
                     continue
