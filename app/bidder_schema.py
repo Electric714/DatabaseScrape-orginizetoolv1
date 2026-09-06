@@ -130,7 +130,7 @@ def _location_parts(location: str) -> tuple[str, str, str]:
     )
 
 
-def bidder_row(row: dict[str, Any]) -> dict[str, Any]:
+def bidder_row(row: dict[str, Any], fallback_id: bool = True) -> dict[str, Any]:
     """Project an internal research record into the exact 30-column bidder database layout."""
     extra = _extra_dict(row)
     bidder = dict(extra.get("bidder_fields") or {})
@@ -150,7 +150,7 @@ def bidder_row(row: dict[str, Any]) -> dict[str, Any]:
     ).strip()
 
     projected = {column: str(bidder.get(column) or "").strip() for column in BIDDER_COLUMNS}
-    projected["id"] = bidder.get("id") or row.get("id") or ""
+    projected["id"] = bidder.get("id") or (row.get("id") if fallback_id else "") or ""
     projected["contractor_name"] = contractor
     projected["address_1"] = str(
         bidder.get("address_1")
