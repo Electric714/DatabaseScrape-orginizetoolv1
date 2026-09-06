@@ -164,4 +164,5 @@ def bidder_row(row: dict[str, Any]) -> dict[str, Any]:
         elif generic in {"open", "closed"}:
             projected["osha"] = "Y"
 
+    projected["_record_id"] = row.get("id") or ""
     return projected
