@@ -137,7 +137,7 @@ def test_negative_osha_result_requires_complete_query_set():
     record, = adapter.finalize_records(complete=True)
     assert record["osha"] == "N"
     assert record["osha_severe_violations"] == ""
-    assert "No exact-name OSHA inspection match" in record["osha_details"]
+    assert "No exact-name or plausible similar-name OSHA inspection match" in record["osha_details"]
 
 
 async def test_osha_query_mode_crawls_master_and_proposes_update(database):
