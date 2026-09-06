@@ -24,6 +24,7 @@ from .crawler import CrawlEngine, canonicalize_url
 from .security import validate_public_url
 from .runtime import single_instance
 from .models import OshaStatus, ResearchField, ScanOptions, SourceCreate, SourceUpdate
+from .bidder_schema import BIDDER_COLUMNS, bidder_row
 
 TASKS: dict[int, asyncio.Task] = {}
 SCHEDULER_TASK: asyncio.Task | None = None
@@ -255,6 +256,25 @@ async def records(
                                    field=field, osha_status=osha_status)
 
 
+@app.get("/api/bidder-schema")
+async def bidder_schema():
+    return {"columns": BIDDER_COLUMNS}
+
+
+@app.get("/api/bidder-records")
+async def bidder_records(
+    q: str = "",
+    source_id: int | None = None,
+    field: ResearchField = "all",
+    osha_status: OshaStatus | None = None,
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+):
+    result = await db.search_records(q=q.strip(), source_id=source_id, limit=limit, offset=offset,
+                                     field=field, osha_status=osha_status)
+    return {"total": result["total"], "items": [bidder_row(dict(row)) for row in result["items"]]}
+
+
 @app.get("/api/records/{record_id}")
 async def record_details(record_id: int):
     record = await db.get_record(record_id)
@@ -282,45 +302,43 @@ async def export_records(format: str = "csv", q: str = "", source_id: int | None
 
 
 def build_export(fmt, records):
-    columns = [
-        "id", "source_name", "name", "company", "owner", "phone", "address", "location", "osha_status", "osha_details", "date", "external_id",
-        "source_url", "first_seen", "last_seen", "last_changed", "active", "inactive_since", "extra_json",
-    ]
+    columns = BIDDER_COLUMNS
+    projected = [bidder_row(dict(row)) for row in records]
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
 
     if fmt == "json":
-        body = json.dumps([{k: row.get(k) for k in columns} for row in records], ensure_ascii=False, indent=2)
+        body = json.dumps([{k: row.get(k, "") for k in columns} for row in projected], ensure_ascii=False, indent=2)
         return StreamingResponse(
             io.BytesIO(body.encode("utf-8")), media_type="application/json",
-            headers={"Content-Disposition": f'attachment; filename="records-{stamp}.json"'},
+            headers={"Content-Disposition": f'attachment; filename="bidder-database-{stamp}.json"'},
         )
 
     if fmt == "csv":
         text = io.StringIO()
         writer = csv.DictWriter(text, fieldnames=columns, extrasaction="ignore")
         writer.writeheader()
-        writer.writerows({k: spreadsheet_text(row.get(k)) for k in columns} for row in records)
+        writer.writerows({k: spreadsheet_text(row.get(k, "")) for k in columns} for row in projected)
         return StreamingResponse(
             io.BytesIO(text.getvalue().encode("utf-8-sig")), media_type="text/csv",
-            headers={"Content-Disposition": f'attachment; filename="records-{stamp}.csv"'},
+            headers={"Content-Disposition": f'attachment; filename="bidder-database-{stamp}.csv"'},
         )
 
     workbook = Workbook(write_only=True)
-    sheet = workbook.create_sheet("Records")
+    sheet = workbook.create_sheet("Bidder Database")
     sheet.freeze_panes = "A2"
-    sheet.auto_filter.ref = f"A1:{get_column_letter(len(columns))}{len(records) + 1}"
+    sheet.auto_filter.ref = f"A1:{get_column_letter(len(columns))}{len(projected) + 1}"
     for index in range(1, len(columns) + 1):
         sheet.column_dimensions[get_column_letter(index)].width = 24
     sheet.append(columns)
-    for row in records:
-        sheet.append([spreadsheet_text(row.get(k)) for k in columns])
+    for row in projected:
+        sheet.append([spreadsheet_text(row.get(k, "")) for k in columns])
     binary = io.BytesIO()
     workbook.save(binary)
     binary.seek(0)
     return StreamingResponse(
         binary,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="records-{stamp}.xlsx"'},
+        headers={"Content-Disposition": f'attachment; filename="bidder-database-{stamp}.xlsx"'},
     )
 
 
