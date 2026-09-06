@@ -16,6 +16,7 @@ from lxml import etree
 
 from . import database as db
 from . import activity
+from . import bidder_master as bidder_master_db
 from .adapters import adapter_for_url
 from .config import ASSET_EXTENSIONS, DEFAULT_TIMEOUT_SECONDS, DEFAULT_USER_AGENT, MAX_BODY_BYTES
 from .security import PublicTransport
@@ -165,8 +166,21 @@ class CrawlEngine:
                 timeout=DEFAULT_TIMEOUT_SECONDS, headers={"User-Agent": DEFAULT_USER_AGENT},
             ) as client:
                 await self._load_robots(client)
-                activity.emit("INFO", "Crawl policy checked; discovering sitemap links", source_id=self.source_id, job_id=self.job_id)
-                frontier = [self.start_url, *await self._discover_sitemap_urls(client)]
+                if getattr(self.adapter, "query_mode", False):
+                    master_rows = await bidder_master_db.all_rows()
+                    if not master_rows:
+                        raise ValueError("Import the master bidder CSV before running the OSHA contractor search")
+                    frontier = list(self.adapter.seed_urls(master_rows))
+                    if not frontier:
+                        raise ValueError("The master bidder database contains no contractor names to search")
+                    activity.emit(
+                        "INFO", "Starting targeted contractor queries",
+                        source_id=self.source_id, job_id=self.job_id,
+                        contractors=len(master_rows), query_pages=len(frontier),
+                    )
+                else:
+                    activity.emit("INFO", "Crawl policy checked; discovering sitemap links", source_id=self.source_id, job_id=self.job_id)
+                    frontier = [self.start_url, *await self._discover_sitemap_urls(client)]
                 # Level barriers prevent a fast deep path from hiding a shorter path.
                 for depth in range(self.max_depth + 1):
                     batch = []
@@ -195,6 +209,18 @@ class CrawlEngine:
                         break
                     if depth == self.max_depth and any(self._allowed_url(u) and canonicalize_url(u) not in self.seen for u in frontier):
                         self.limited = True
+                job = await db.get_job(self.job_id)
+                complete = not self.limited and not job["errors"]
+                if hasattr(self.adapter, "finalize_records"):
+                    try:
+                        final_records = self.adapter.finalize_records(complete=complete)
+                        await self._store_final_records(final_records)
+                    except Exception as exc:
+                        await db.increment_job(self.job_id, errors=1)
+                        activity.emit(
+                            "ERROR", "Source adapter could not finalize contractor findings",
+                            source_id=self.source_id, job_id=self.job_id, error=str(exc),
+                        )
                 job = await db.get_job(self.job_id)
                 complete = not self.limited and not job["errors"]
                 activity.emit("INFO" if complete else "WARNING", "Scan completed" if complete else "Scan finished with limits or errors",
@@ -246,7 +272,7 @@ class CrawlEngine:
         if CHALLENGE.search(result.text):
             raise ValueError("Explicit access challenge detected; no rendering attempted")
         digest = hashlib.sha256(result.text.encode()).hexdigest()
-        if cached and cached.get("content_hash") == digest and not self.force_full:
+        if cached and cached.get("content_hash") == digest and not self.force_full and not getattr(self.adapter, "always_parse", False):
             await self._touch_cached(url)
             links = json.loads(cached.get("discovered_links") or "[]")
         else:
@@ -269,6 +295,23 @@ class CrawlEngine:
             content_hash=digest, discovered_links=json.dumps(links), last_error=None, rendered=int(result.rendered), fetch_mode=self.render_mode)
         return links
 
+    async def _store_final_records(self, records):
+        if not records:
+            return
+        await db.increment_job(self.job_id, records_found=len(records))
+        for record in records:
+            self._register_record(entity_key(record), record_hash(record))
+            outcome = await db.upsert_record(self.source_id, record)
+            if outcome in {"new", "updated"}:
+                await db.increment_job(self.job_id, **{f"records_{outcome}": 1})
+            # Query-oriented adapters produce one contractor-level aggregate.
+            # Associate it with its real source query URL so complete scans can
+            # still drive active/inactive observations safely.
+            await db.observe_page_records(
+                self.source_id, record.get("source_url") or self.start_url,
+                self.job_id, [record],
+            )
+
     def _register_record(self, key, value):
         if key in self.record_digests and self.record_digests[key] != value:
             raise ValueError("Conflicting representations of the same record; a site adapter must select the authoritative detail")
@@ -282,7 +325,7 @@ class CrawlEngine:
 
     async def _fetch(self, client, url, cached):
         headers = {}
-        if cached and cached.get("fetch_mode") == self.render_mode and not self.force_full and not cached.get("rendered") and self.render_mode != "browser":
+        if cached and cached.get("fetch_mode") == self.render_mode and not self.force_full and not cached.get("rendered") and self.render_mode != "browser" and not getattr(self.adapter, "always_parse", False):
             if cached.get("etag"):
                 headers["If-None-Match"] = cached["etag"]
             if cached.get("last_modified"):
