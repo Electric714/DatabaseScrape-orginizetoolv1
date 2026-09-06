@@ -1,5 +1,8 @@
+import csv
+import io
 import json
 import re
+import unicodedata
 from typing import Any
 
 BIDDER_COLUMNS = [
@@ -170,3 +173,86 @@ def bidder_row(row: dict[str, Any]) -> dict[str, Any]:
 
     projected["_record_id"] = row.get("id") or ""
     return projected
+
+
+BIDDER_DB_COLUMNS = ["bidder_id", *BIDDER_COLUMNS[1:]]
+COMPLIANCE_COLUMNS = BIDDER_COLUMNS[11:]
+
+
+def normalize_match_text(value: Any) -> str:
+    """Conservative normalization for matching the same contractor across sources."""
+    text = unicodedata.normalize("NFKC", str(value or "")).casefold()
+    text = text.replace("&", " and ")
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return " ".join(text.split())
+
+
+def bidder_values_equal(left: Any, right: Any) -> bool:
+    """Avoid noisy proposals caused only by case, punctuation, or whitespace."""
+    return normalize_match_text(left) == normalize_match_text(right)
+
+
+def bidder_master_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Return a stored master row using the law firm's exact external column names."""
+    result = {column: "" for column in BIDDER_COLUMNS}
+    result["id"] = str(row.get("bidder_id") or "")
+    for column in BIDDER_COLUMNS[1:]:
+        result[column] = str(row.get(column) or "")
+    result["_master_id"] = row.get("pk") or row.get("_master_id") or ""
+    result["_updated_at"] = row.get("updated_at") or ""
+    result["_source_import_id"] = row.get("source_import_id") or ""
+    return result
+
+
+def parse_bidder_csv(data: bytes) -> tuple[list[dict[str, str]], list[str]]:
+    """Parse a bidder CSV without coercing ZIP codes or identifiers to numbers."""
+    if not data:
+        raise ValueError("The CSV file is empty.")
+    if len(data) > 20 * 1024 * 1024:
+        raise ValueError("The CSV file is larger than the 20 MB import limit.")
+    decoded = None
+    for encoding in ("utf-8-sig", "cp1252"):
+        try:
+            decoded = data.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+    if decoded is None:
+        raise ValueError("The CSV could not be decoded as UTF-8 or Windows-1252.")
+
+    reader = csv.DictReader(io.StringIO(decoded, newline=""))
+    if not reader.fieldnames:
+        raise ValueError("The CSV does not contain a header row.")
+
+    normalized_headers = {str(name or "").strip().casefold(): str(name or "") for name in reader.fieldnames}
+    missing = [column for column in BIDDER_COLUMNS if column.casefold() not in normalized_headers]
+    if missing:
+        raise ValueError("Missing bidder database columns: " + ", ".join(missing))
+
+    extras = [
+        original for folded, original in normalized_headers.items()
+        if folded not in {column.casefold() for column in BIDDER_COLUMNS}
+    ]
+    warnings = []
+    if extras:
+        warnings.append("Ignored extra columns: " + ", ".join(extras))
+
+    header_lookup = {column: normalized_headers[column.casefold()] for column in BIDDER_COLUMNS}
+    rows: list[dict[str, str]] = []
+    for line_number, raw in enumerate(reader, start=2):
+        row = {column: clean_csv_cell(raw.get(header_lookup[column])) for column in BIDDER_COLUMNS}
+        if not any(row.values()):
+            continue
+        if not row["contractor_name"]:
+            warnings.append(f"Row {line_number} was skipped because contractor_name is blank.")
+            continue
+        rows.append(row)
+    if not rows:
+        raise ValueError("The CSV contains no bidder rows with a contractor_name.")
+    return rows, warnings
+
+
+def clean_csv_cell(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).replace("\x00", "").strip()
