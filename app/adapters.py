@@ -2,6 +2,7 @@ from typing import Protocol
 from urllib.parse import urlsplit
 
 from .extractor import discover_links, extract_records
+from .osha_adapter import OshaEstablishmentAdapter
 
 
 class SourceAdapter(Protocol):
@@ -25,7 +26,9 @@ class GenericAdapter:
 
 # Register exact hostnames here. Adapters return a stable, namespaced external_id
 # and can narrow query/pagination boundaries, but cannot widen the network policy.
-ADAPTERS: dict[str, type[GenericAdapter]] = {}
+ADAPTERS: dict[str, type[GenericAdapter]] = {
+    "www.osha.gov": OshaEstablishmentAdapter,
+}
 
 
 def adapter_for_url(url: str) -> SourceAdapter:

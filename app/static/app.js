@@ -65,9 +65,11 @@ async function loadSources() {
     const running = isCollecting(s);
     return '<article class="source-row"><div class="source-avatar" aria-hidden="true">' + (index + 1) + '</div><div class="source-info"><h3>' + esc(s.name) + '</h3><a class="source-url" href="' + esc(safeUrl(s.start_url)) + '" target="_blank" rel="noreferrer">' + esc(s.start_url) + '</a><div class="source-details"><span class="tag ' + esc(s.last_status || '') + '">' + esc(s.last_status || 'Ready to collect') + '</span><span>' + (s.auto_scan ? 'Every ' + s.interval_minutes + ' min' : 'Manual collection') + '</span><span>· ' + esc(humanDate(s.last_scan_at)) + '</span></div></div><div class="source-controls"><button class="scan-button" data-scan="' + s.id + '"' + (running ? ' disabled' : '') + '>' + (running ? 'Collecting…' : 'Collect records') + '</button><button class="settings-button" data-edit="' + s.id + '">Edit settings</button><button class="icon-button" data-full="' + s.id + '" aria-label="Recollect all pages from ' + esc(s.name) + '" title="Recollect all pages, ignoring cached pages"' + (running ? ' disabled' : '') + '>↻</button><button class="icon-button" data-delete="' + s.id + '" aria-label="Delete ' + esc(s.name) + '" title="Remove research site"' + (running ? ' disabled' : '') + '>×</button></div></article>';
   }).join('');
+  const hasOsha = sources.some(s => { try { return new URL(s.start_url).hostname.toLowerCase() === 'www.osha.gov'; } catch { return false; } });
   const pending = Array.from({length: Math.max(0, 6 - sources.length)}, (_, index) => {
     const number = sources.length + index + 1;
-    return '<article class="pending-site"><span class="pending-number" aria-hidden="true">' + number + '</span><div><h3>Research site ' + number + '</h3><p>Name and website address pending</p></div><button class="button subtle small" data-open-source="' + number + '">Set up site ' + number + '</button></article>';
+    const oshaPreset = !hasOsha && index === 0;
+    return '<article class="pending-site"><span class="pending-number" aria-hidden="true">' + number + '</span><div><h3>' + (oshaPreset ? 'OSHA Establishment Search' : 'Research site ' + number) + '</h3><p>' + (oshaPreset ? 'Proof of concept · queries imported master contractors only' : 'Name and website address pending') + '</p></div><button class="button subtle small" data-open-source="' + number + '"' + (oshaPreset ? ' data-preset="osha"' : '') + '>' + (oshaPreset ? 'Set up OSHA' : 'Set up site ' + number) + '</button></article>';
   }).join('');
   $('sources').innerHTML = (configured ? '<div class="source-list">' + configured + '</div>' : '') + (pending ? '<div class="pending-sites">' + pending + '</div>' : '') + (sources.length >= 6 ? '<div class="additional-source"><button class="text-button" data-open-source>Add another research site</button></div>' : '');
 }
@@ -301,7 +303,7 @@ async function refreshAll() {
     $('lastSync').textContent = 'Retrying connection…';
   } finally { state.refreshing = false; }
 }
-function openSource(slot, existing = null) {
+function openSource(slot, existing = null, preset = null) {
   state.editingId = existing?.id || null;
   $('sourceForm').reset();
   $('formMessage').textContent = '';
@@ -315,6 +317,17 @@ function openSource(slot, existing = null) {
     Object.entries(fields).forEach(([id, key]) => { $(id).value = existing[key]; });
     $('autoScan').value = String(Boolean(existing.auto_scan));
     $('respectRobots').value = String(Boolean(existing.respect_robots));
+  }
+  if (!existing && preset === 'osha') {
+    $('sourceName').value = 'OSHA Establishment Search';
+    $('sourceUrl').value = 'https://www.osha.gov/ords/imis/establishment.html';
+    $('renderMode').value = 'http';
+    $('concurrency').value = '2';
+    $('delayMs').value = '500';
+    $('maxDepth').value = '12';
+    $('respectRobots').value = 'true';
+    $('sourceDialog').querySelector('.modal-intro').textContent = 'OSHA proof of concept. This source searches only contractors and related-company names already loaded in the master bidder database.';
+    $('sourceDialog').querySelector('.setup-note').textContent = 'Import the master bidder CSV first. OSHA searches run in ten-year windows from 1972 to today and retain source evidence for review before any master value changes.';
   }
   $('sourceDialog').querySelector('.advanced').open = Boolean(existing);
   $('sourceDialog').showModal();
@@ -409,7 +422,7 @@ async function captureSnapshot() {
 document.addEventListener('click', event => {
   const button = event.target.closest('button');
   if (!button) return;
-  if (button.hasAttribute('data-open-source')) openSource(button.dataset.openSource);
+  if (button.hasAttribute('data-open-source')) openSource(button.dataset.openSource, null, button.dataset.preset || null);
   if (button.dataset.record) viewRecord(+button.dataset.record);
   if (button.dataset.edit) openSource(null, state.sources.find(s => s.id === +button.dataset.edit));
   if (button.dataset.close) $(button.dataset.close).close();

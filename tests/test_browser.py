@@ -71,7 +71,7 @@ def test_live_gui_smoke(database, monkeypatch):
                 assert table_layout["scrollWidth"] > table_layout["clientWidth"] * 2
                 assert table_layout["firstWidth"] >= 80
                 assert table_layout["secondWidth"] >= 240
-                page.get_by_role("button", name="Set up site 1", exact=True).click()
+                page.locator("[data-open-source]").first.click()
                 page.locator("#sourceName").fill("GUI fixture")
                 page.locator("#sourceUrl").fill("https://fixture.test/")
                 page.locator("summary").click()
