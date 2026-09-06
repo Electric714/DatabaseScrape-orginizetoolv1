@@ -280,6 +280,7 @@ async def record_details(record_id: int):
     record = await db.get_record(record_id)
     if not record:
         raise HTTPException(status_code=404, detail="Research record not found")
+    record["bidder"] = bidder_row(dict(record))
     return record
 
 
