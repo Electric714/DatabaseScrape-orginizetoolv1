@@ -1,9 +1,6 @@
-# Paralegal Research Desk — technical reference
+# Paralegal Database Tool — technical reference
 
-The app supports a paralegal's six-site public-record research workflow: collect
-business/person/ownership details, locations and addresses, and source-reported
-OSHA findings into a searchable local database. The six site integrations await
-their actual names and URLs. See the main README for current user instructions.
+The app supports a paralegal's contractor/bidder database workflow: import the firm's approved master database, run targeted public-record queries across six designated sources, retain source evidence separately, compare findings against the master, and require review before applying changes. The six site integrations await their actual names and URLs. See the main README for current user instructions.
 
 ## Audited foundation (September 2026)
 
@@ -113,7 +110,7 @@ SQLite + record history
 Search + CSV/XLSX/JSON exports
 ```
 
-The generic extractor gives us a broad starting point. The production-quality path is to add one adapter for each of the six real websites. Each adapter can define that site's exact pagination, directory/detail-page selectors, stable record IDs, field mappings, and any source-specific update behavior while reusing the crawler, scheduler, database, history, search, and export layers.
+The generic extractor gives us a broad fallback, but production collection should be query-focused rather than site-wide by default. Each of the six adapters should define the contractor/company query inputs, search-form or public-endpoint interaction, result identity/match rules, pagination/detail routes, and the exact bidder fields for which that source is authoritative. The shared crawler, scheduler, evidence store, master database, comparison queue, history, search, and export layers remain reusable.
 
 ## Run locally
 
@@ -161,7 +158,7 @@ If the law firm eventually needs multiple crawler workers or substantially highe
 
 ## Site adapters
 
-Site-specific adapters are selected in `app/adapters.py`. Once the six target sites are available, the next phase is to inspect each site's real structure and add deterministic extractors. That will be much more reliable than trying to make one heuristic parser pretend every website on Earth has the same HTML.
+Site-specific adapters are selected in `app/adapters.py`. The adapter registry is currently empty, so the six actual source integrations are still the major unfinished piece. Once those sites are available, each adapter should prefer targeted contractor/company queries and narrowly follow the result/detail paths needed for the firm's criteria. A generic same-host crawl remains a fallback/discovery mechanism, not the final research strategy.
 
 ## Responsible operation
 
