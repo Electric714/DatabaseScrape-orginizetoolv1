@@ -4,15 +4,17 @@ This project is being built for a working paralegal: collect relevant public rec
 
 The central workflow is **select the research sites → collect their records → search the saved database → inspect the original source → export the relevant results**.
 
-## What the research records need to contain
-- Business or company name.
-- Person's name and business owner, kept separate when the source distinguishes them.
-- Business location and full address.
-- OSHA violation/status information when explicitly reported by a source, including its original wording.
-- Other source-provided details such as phone, document/record identifier, and document date.
-- Source website/link and collection timestamps so findings can be checked against their origin.
+## Bidder database structure
 
-A missing OSHA field means **unknown or not reported**, not “no violations.” An open-violation finding must come from source evidence; a keyword match or missing record does not establish a business's current status.
+The user-facing database and CSV/Excel/JSON exports now follow the law firm's supplied **Bidder Database-Example.csv** layout exactly, in this exact 30-column order:
+
+`id`, `contractor_name`, `related_companies`, `address_1`, `city`, `state`, `zip`, `additional_address`, `additional_address_city`, `additional_address_state`, `additional_address_zip`, `dfi`, `wc`, `wc_date`, `osha_severe_violations`, `years`, `osha`, `state_federal_debarment`, `mndol_ineligibility`, `public_works_projects_budget_time_quality_complaint`, `federal_court`, `circuit_court`, `ccap_show150`, `environmental_violations`, `prevailing_wage_violations`, `dwd`, `dwd_substance_abuse_plan`, `better_business_bureau_complaints`, `misc_violations`, `tax_liability`.
+
+The crawler still keeps internal source URL, collection timestamps, generic contact details, page evidence, and change history underneath those 30 fields. That provenance is deliberately not added as extra columns to the bidder export.
+
+The generic extractor recognizes the exact field names above plus common human-readable label variants. Fields a website does not provide remain blank until that source's adapter can populate them. The six real website adapters will determine the authoritative meaning and mapping for DFI, workers' compensation, OSHA, debarment, courts, DWD, BBB, tax liability, and other compliance fields.
+
+A blank compliance field means **unknown or not supplied by that source**, not a clean record. Automated adapters must preserve source wording rather than infer legal conclusions from missing data.
 
 ## The six websites
 The six website names and URLs are **pending**. The interface has six numbered positions ready for them, clearly marked as not yet configured.
@@ -37,7 +39,7 @@ If setup fails, run **2 - REPAIR Setup.cmd**, then start again. Repair preserves
 ## Your workspace
 - **Research websites:** six visible site positions, with Collect records and Update configured sites controls. Edit settings to adjust scheduling or limits without removing saved records.
 - **Collection:** update configured sources and follow progress and errors.
-- **Local research database:** find saved business/person records, filter by source, inspect provenance, and export CSV, Excel, or JSON. Search specifically by business, person, owner, address, or location; filter source-reported OSHA status. Open a record to review source wording, links, and collection dates.
+- **Bidder database:** review the exact 30-column law-firm layout, search across saved source data, filter by source, inspect provenance, and export the same 30-column structure as CSV, Excel, or JSON. Open a contractor name to review source wording, links, and collection dates.
 - **Activity console:** follow progress, filter warnings/errors, search, pause, and jump to the latest event.
 
 To share a problem, reproduce it, click **Capture snapshot**, then **Export report**. This downloads a diagnostic ZIP. If the server is unavailable, export downloads the visible browser logs as JSON.

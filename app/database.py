@@ -375,7 +375,7 @@ def _sync_upsert_record(source_id: int, record: dict[str, Any]) -> str:
 
 def _sync_search_records(q: str = "", source_id: int | None = None, limit: int = 100, offset: int = 0,
                          field: str = "all", osha_status: str | None = None) -> dict[str, Any]:
-    search_fields = {"all": ("name", "company", "owner", "phone", "address", "location", "date", "source_url", "external_id", "osha_details"),
+    search_fields = {"all": ("name", "company", "owner", "phone", "address", "location", "date", "source_url", "external_id", "osha_details", "extra_json"),
                      **{name: (name,) for name in ("name", "company", "owner", "address", "location")}}
     if field not in search_fields:
         raise ValueError("Unknown research search field")

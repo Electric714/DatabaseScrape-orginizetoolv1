@@ -351,15 +351,15 @@ def test_api_smoke_and_exports(database, monkeypatch):
         assert client.get("/api/records?q=Jane").json()["total"] == 1
         assert client.get("/api/records").json()["total"] == 3
         with closing(db.connect()) as conn:
-            conn.execute("UPDATE records SET name='=1+1' WHERE external_id='P1'")
+            conn.execute("UPDATE records SET company='=1+1' WHERE external_id='P1'")
             conn.commit()
         csv_response = client.get("/api/export?format=csv")
         assert csv_response.status_code == 200
         rows = list(csv.DictReader(io.StringIO(csv_response.content.decode("utf-8-sig"))))
-        assert any(row["name"] == "'=1+1" for row in rows)
+        assert any(row["contractor_name"] == "'=1+1" for row in rows)
         xlsx = client.get("/api/export?format=xlsx")
         book = load_workbook(io.BytesIO(xlsx.content))
         assert book.active.max_row == 4
         assert all(cell.data_type != "f" for row in book.active for cell in row)
-        assert any(row["name"] == "=1+1" for row in client.get("/api/export?format=json").json())
+        assert any(row["contractor_name"] == "=1+1" for row in client.get("/api/export?format=json").json())
         assert client.get("/api/export?format=bad").status_code == 400

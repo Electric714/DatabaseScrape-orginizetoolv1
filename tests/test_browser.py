@@ -58,7 +58,7 @@ def test_live_gui_smoke(database, monkeypatch):
                 page.get_by_role("button", name="Save research site", exact=True).click()
                 page.get_by_role("button", name="Collect records", exact=True).wait_for()
                 page.get_by_role("button", name="Collect records", exact=True).click()
-                page.get_by_role("cell", name="Jane Doe", exact=True).wait_for(timeout=15000)
+                page.get_by_role("button", name="View source evidence for Example Builders P1", exact=True).wait_for(timeout=15000)
                 page.locator("#sourceFilter").select_option(label="GUI fixture")
                 page.wait_for_timeout(3500)
                 assert page.locator("#sourceFilter option:checked").inner_text() == "GUI fixture"
@@ -67,8 +67,8 @@ def test_live_gui_smoke(database, monkeypatch):
                 page.get_by_role("button", name="Search records", exact=True).click()
                 from playwright.sync_api import expect
                 expect(page.locator("#records tr")).to_have_count(1)
-                expect(page.locator("#records")).to_contain_text("Sample Owner")
-                page.get_by_role("button", name="View record: Example Builders P1", exact=True).click()
+                expect(page.locator("#records")).to_contain_text("Example Builders P1")
+                page.get_by_role("button", name="View source evidence for Example Builders P1", exact=True).click()
                 expect(page.locator("#recordDetail")).to_contain_text("Illustrative fixture only")
                 page.get_by_role("button", name="Close record", exact=True).click()
                 page.locator("#clearFilters").click()
