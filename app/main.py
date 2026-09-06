@@ -93,7 +93,7 @@ async def lifespan(_app: FastAPI):
     with single_instance():
         await db.init_db()
         activity.install()
-        activity.emit("INFO", "Paralegal Research Desk started. Ready to collect public business records.", version=activity.APP_VERSION)
+        activity.emit("INFO", "Paralegal Database Tool started. Ready to maintain the master bidder database and collect public-record evidence.", version=activity.APP_VERSION)
         await db.mark_interrupted_jobs()
         SCHEDULER_TASK = asyncio.create_task(scheduler_loop(), name="source-scheduler")
         try:
@@ -111,7 +111,7 @@ async def lifespan(_app: FastAPI):
 
 
 
-app = FastAPI(title="Paralegal Research Desk", version=activity.APP_VERSION, lifespan=lifespan)
+app = FastAPI(title="Paralegal Database Tool", version=activity.APP_VERSION, lifespan=lifespan)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "[::1]", "testserver"])
 
 
@@ -146,7 +146,7 @@ async def home():
 
 @app.get("/api/health")
 async def health():
-    return {"ok": True, "version": activity.APP_VERSION, "application": "public-data-monitor",
+    return {"ok": True, "version": activity.APP_VERSION, "application": "paralegal-database-tool",
             "workspace": hashlib.sha256(str(db.DB_PATH.resolve()).encode()).hexdigest()[:16]}
 
 
@@ -166,7 +166,7 @@ async def activity_snapshot():
 async def activity_export():
     activity.emit("INFO", "Diagnostic report exported")
     return StreamingResponse(io.BytesIO(await activity.bundle()), media_type="application/zip",
-        headers={"Content-Disposition": 'attachment; filename="public-data-monitor-diagnostics.zip"'})
+        headers={"Content-Disposition": 'attachment; filename="paralegal-database-tool-diagnostics.zip"'})
 
 
 @app.get("/api/stats")
