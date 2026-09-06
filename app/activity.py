@@ -64,7 +64,7 @@ async def bundle():
     events = await db.list_events(limit=5000)
     jobs = await db.list_jobs(limit=30)
     summary = {
-        "application": "Paralegal Research Desk", "version": APP_VERSION,
+        "application": "Paralegal Database Tool", "version": APP_VERSION,
         "created_at": db.utcnow(), "python": platform.python_version(),
         "platform": platform.system(), "counts": await db.stats(),
         "recent_jobs": [{k: v for k, v in job.items() if k not in {"source_name", "message"}} for job in jobs],
