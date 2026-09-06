@@ -58,7 +58,7 @@ def test_live_gui_smoke(database, monkeypatch):
                 page.get_by_role("button", name="Save research site", exact=True).click()
                 page.get_by_role("button", name="Collect records", exact=True).wait_for()
                 page.get_by_role("button", name="Collect records", exact=True).click()
-                page.get_by_role("cell", name="Example Builders P1", exact=True).wait_for(timeout=15000)
+                page.get_by_role("button", name="View source evidence for Example Builders P1", exact=True).wait_for(timeout=15000)
                 page.locator("#sourceFilter").select_option(label="GUI fixture")
                 page.wait_for_timeout(3500)
                 assert page.locator("#sourceFilter option:checked").inner_text() == "GUI fixture"
