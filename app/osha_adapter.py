@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from difflib import SequenceMatcher
 from datetime import date
 from urllib.parse import parse_qs, urlencode, urljoin, urlsplit
 
@@ -176,6 +177,7 @@ class OshaEstablishmentAdapter:
         self.term_contexts: dict[str, list[str]] = defaultdict(list)
         self.detail_context: dict[str, str] = {}
         self.inspections: dict[str, dict[str, dict]] = defaultdict(dict)
+        self.ambiguous_candidates: dict[str, dict[str, dict]] = defaultdict(dict)
         self.query_urls: dict[str, list[str]] = defaultdict(list)
 
     def seed_urls(self, master_rows: list[dict], today: date | None = None) -> list[str]:
@@ -183,6 +185,7 @@ class OshaEstablishmentAdapter:
         self.term_contexts.clear()
         self.detail_context.clear()
         self.inspections.clear()
+        self.ambiguous_candidates.clear()
         self.query_urls.clear()
 
         urls = []
@@ -241,6 +244,19 @@ class OshaEstablishmentAdapter:
         candidate = company_core(candidate_name)
         return bool(candidate and candidate in set(self.contractors[context_key].get("_osha_match_cores") or []))
 
+    def _candidate_is_plausible(self, candidate_name: str, context_key: str) -> bool:
+        candidate = company_core(candidate_name)
+        if len(candidate) < 6:
+            return False
+        for target in self.contractors[context_key].get("_osha_match_cores") or []:
+            if not target:
+                continue
+            if candidate in target or target in candidate:
+                return True
+            if SequenceMatcher(None, candidate, target).ratio() >= 0.84:
+                return True
+        return False
+
     def links(self, html: str, url: str) -> list[str]:
         parts = urlsplit(url)
         if parts.path.lower() != OSHA_SEARCH_PATH:
@@ -273,6 +289,15 @@ class OshaEstablishmentAdapter:
                 if len(matched) == 1:
                     self.detail_context[inspection_id] = matched[0]
                     links.append(detail_url)
+                elif not matched:
+                    for key in contexts:
+                        if self._candidate_is_plausible(candidate_name, key):
+                            self.ambiguous_candidates[key][inspection_id] = {
+                                "inspection_id": inspection_id,
+                                "establishment_name": candidate_name,
+                                "detail_url": detail_url,
+                                "search_url": url,
+                            }
 
         # OSHA paginates at 20 rows. Follow page navigation for this exact query,
         # but ignore sort links and unrelated site navigation.
@@ -318,6 +343,7 @@ class OshaEstablishmentAdapter:
         records = []
         for key, contractor in self.contractors.items():
             inspections = list(self.inspections.get(key, {}).values())
+            ambiguous = list(self.ambiguous_candidates.get(key, {}).values())
             if not inspections and not complete:
                 # A partial crawl cannot prove an OSHA-negative result.
                 continue
@@ -332,7 +358,9 @@ class OshaEstablishmentAdapter:
                 if item.get("date_opened") and int(item.get("severe_current_violations") or 0) > 0
             })
             latest_date = inspections[-1]["date_opened"] if inspections else ""
-            osha_value = "Y" if inspections else "N"
+            # A plausible-but-nonexact OSHA name is not silently converted to N.
+            # It remains unknown until a human/site-specific rule resolves it.
+            osha_value = "Y" if inspections else ("" if ambiguous else "N")
 
             # Aggregate counts are only authoritative after every targeted search
             # page/detail path completed. Positive existence is still safe on a
@@ -349,8 +377,13 @@ class OshaEstablishmentAdapter:
                 )
             if inspections:
                 narrative = f"OSHA establishment search matched {len(inspections)} inspection(s). " + "; ".join(details)
+                if ambiguous:
+                    narrative += f" {len(ambiguous)} additional similar-name result(s) were retained as unresolved candidates."
+            elif ambiguous:
+                names = ", ".join(sorted({item["establishment_name"] for item in ambiguous})[:8])
+                narrative = "OSHA returned similar establishment names that require manual identity review before assigning Y/N: " + names
             else:
-                narrative = "No exact-name OSHA inspection match was found across the completed 1972-present targeted searches."
+                narrative = "No exact-name or plausible similar-name OSHA inspection match was found across the completed 1972-present targeted searches."
 
             source_url = (self.query_urls.get(key) or [f"{OSHA_BASE}/ords/imis/establishment.html"])[-1]
             records.append({
@@ -370,6 +403,7 @@ class OshaEstablishmentAdapter:
                     "complete_aggregate": bool(complete),
                     "severe_definition": "Current Serious + Willful + Repeat violations",
                     "osha_inspections": inspections,
+                    "ambiguous_candidates": ambiguous,
                 },
             })
         return records
