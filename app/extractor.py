@@ -6,6 +6,7 @@ from urllib.parse import urljoin
 from bs4 import BeautifulSoup
 
 from .normalizer import clean_text, canonical_record, entity_key
+from .bidder_schema import BIDDER_COLUMNS, BIDDER_FIELD_ALIASES
 
 PHONE_RE = re.compile(r"(?<!\d)(?:\+?1[\s.-]?)?(?:\(?\d{3}\)?[\s.-]?)\d{3}[\s.-]?\d{4}(?!\d)")
 DATE_RE = re.compile(
@@ -32,12 +33,17 @@ FIELD_ALIASES = {
     "osha_status": {"osha status", "osha violation status", "osha violations status"},
     "osha_details": {"osha violations", "open osha violations", "osha details", "osha violation details", "osha findings"},
     "date": {"date", "updated", "update date", "filed", "filed date", "record date", "created"},
-    "external_id": {"id", "record id", "case id", "license id", "number", "record number"},
+    "external_id": {"record id", "case id", "license id", "number", "record number"},
 }
 
 
 def _field_for_header(text: str) -> str | None:
     key = clean_text(text).lower().rstrip(":")
+    # Prefer the law firm's exact bidder-database vocabulary when a label is
+    # unambiguous (for example city/state/zip, DFI, WC, or OSHA).
+    for field, aliases in BIDDER_FIELD_ALIASES.items():
+        if key in aliases:
+            return field
     for field, aliases in FIELD_ALIASES.items():
         if key in aliases:
             return field
@@ -70,10 +76,18 @@ def _address_from_jsonld(value: Any) -> str:
 
 
 def _record_has_signal(record: dict[str, Any]) -> bool:
-    return bool(record.get("name") or record.get("company") or record.get("owner")) and bool(
+    bidder_identity = record.get("contractor_name")
+    bidder_evidence = any(
+        record.get(field) not in (None, "")
+        for field in BIDDER_COLUMNS
+        if field not in {"id", "contractor_name"}
+    )
+    return bool(record.get("name") or record.get("company") or record.get("owner") or bidder_identity) and bool(
         record.get("phone") or record.get("address") or record.get("date") or record.get("external_id")
         or record.get("location") or record.get("osha_status") or record.get("osha_details")
         or (record.get("company") and record.get("owner"))
+        or bidder_evidence
+        or record.get("id")
     )
 
 
