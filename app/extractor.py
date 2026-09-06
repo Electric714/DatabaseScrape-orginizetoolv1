@@ -87,7 +87,7 @@ def _record_has_signal(record: dict[str, Any]) -> bool:
         or record.get("location") or record.get("osha_status") or record.get("osha_details")
         or (record.get("company") and record.get("owner"))
         or bidder_evidence
-        or record.get("id")
+        or record.get("bidder_id")
     )
 
 
