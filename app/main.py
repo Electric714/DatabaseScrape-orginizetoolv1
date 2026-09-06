@@ -11,7 +11,7 @@ from starlette.responses import JSONResponse
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone, timedelta
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from openpyxl import Workbook
@@ -19,12 +19,13 @@ from openpyxl.utils import get_column_letter
 
 from . import database as db
 from . import activity
+from . import bidder_master as bidder_db
 from .config import BASE_DIR
 from .crawler import CrawlEngine, canonicalize_url
 from .security import validate_public_url
 from .runtime import single_instance
 from .models import OshaStatus, ResearchField, ScanOptions, SourceCreate, SourceUpdate
-from .bidder_schema import BIDDER_COLUMNS, bidder_row
+from .bidder_schema import BIDDER_COLUMNS, bidder_row, parse_bidder_csv
 
 TASKS: dict[int, asyncio.Task] = {}
 SCHEDULER_TASK: asyncio.Task | None = None
@@ -261,6 +262,93 @@ async def bidder_schema():
     return {"columns": BIDDER_COLUMNS}
 
 
+@app.get("/api/bidder/status")
+async def bidder_status():
+    return await bidder_db.status()
+
+
+@app.post("/api/bidder/import")
+async def import_bidder_csv(request: Request):
+    filename = (request.headers.get("x-filename") or "bidder-database.csv").strip()[:255]
+    data = await request.body()
+    try:
+        rows, warnings = parse_bidder_csv(data)
+        result = await bidder_db.import_rows(filename, rows, warnings)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    activity.emit(
+        "INFO", "Bidder database CSV imported",
+        filename=filename, rows=result["rows_total"], inserted=result["rows_inserted"],
+        updated=result["rows_updated"], unchanged=result["rows_unchanged"],
+    )
+    return result
+
+
+@app.get("/api/bidder/master")
+async def bidder_master_records(
+    q: str = "",
+    field: str = "all",
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+):
+    try:
+        return await bidder_db.search(q=q.strip(), field=field, limit=limit, offset=offset)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/api/bidder/master/{master_id}/history")
+async def bidder_master_history(master_id: int, limit: int = Query(default=200, ge=1, le=1000)):
+    return await bidder_db.history(master_id, limit)
+
+
+@app.post("/api/bidder/compare")
+async def compare_bidder_database():
+    result = await bidder_db.compare()
+    activity.emit("INFO", "Collected records compared with bidder database", **result)
+    return result
+
+
+@app.get("/api/bidder/proposals")
+async def bidder_proposals(status: str = "pending", limit: int = Query(default=500, ge=1, le=2000)):
+    try:
+        return await bidder_db.list_proposals(status_filter=status, limit=limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/api/bidder/proposals/{proposal_id}/apply")
+async def apply_bidder_update(proposal_id: int):
+    try:
+        result = await bidder_db.apply(proposal_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    activity.emit("INFO", "Bidder database update approved", proposal_id=proposal_id, **result)
+    return result
+
+
+@app.post("/api/bidder/proposals/{proposal_id}/dismiss")
+async def dismiss_bidder_update(proposal_id: int):
+    try:
+        result = await bidder_db.dismiss(proposal_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    activity.emit("INFO", "Bidder database update dismissed", proposal_id=proposal_id)
+    return result
+
+
+@app.get("/api/bidder/export")
+async def export_bidder_master(format: str = "csv", q: str = "", field: str = "all"):
+    fmt = format.lower()
+    if fmt not in {"csv", "xlsx", "json"}:
+        raise HTTPException(status_code=400, detail="format must be csv, xlsx, or json")
+    try:
+        rows = await bidder_db.all_rows(q=q.strip(), field=field)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return await asyncio.to_thread(build_bidder_master_export, fmt, rows)
+
+
 @app.get("/api/bidder-records")
 async def bidder_records(
     q: str = "",
@@ -300,6 +388,49 @@ async def export_records(format: str = "csv", q: str = "", source_id: int | None
     except ValueError as exc:
         raise HTTPException(status_code=413, detail=str(exc)) from exc
     return await asyncio.to_thread(build_export, fmt, records)
+
+
+def build_bidder_master_export(fmt, rows):
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    clean_rows = [{column: row.get(column, "") for column in BIDDER_COLUMNS} for row in rows]
+
+    if fmt == "json":
+        body = json.dumps(clean_rows, ensure_ascii=False, indent=2)
+        return StreamingResponse(
+            io.BytesIO(body.encode("utf-8")), media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="bidder-database-{stamp}.json"'},
+        )
+
+    if fmt == "csv":
+        text = io.StringIO()
+        writer = csv.DictWriter(text, fieldnames=BIDDER_COLUMNS, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(
+            {column: spreadsheet_text(row.get(column, "")) for column in BIDDER_COLUMNS}
+            for row in clean_rows
+        )
+        return StreamingResponse(
+            io.BytesIO(text.getvalue().encode("utf-8-sig")), media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="bidder-database-{stamp}.csv"'},
+        )
+
+    workbook = Workbook(write_only=True)
+    sheet = workbook.create_sheet("Bidder Database")
+    sheet.freeze_panes = "A2"
+    sheet.auto_filter.ref = f"A1:{get_column_letter(len(BIDDER_COLUMNS))}{len(clean_rows) + 1}"
+    for index in range(1, len(BIDDER_COLUMNS) + 1):
+        sheet.column_dimensions[get_column_letter(index)].width = 24
+    sheet.append(BIDDER_COLUMNS)
+    for row in clean_rows:
+        sheet.append([spreadsheet_text(row.get(column, "")) for column in BIDDER_COLUMNS])
+    binary = io.BytesIO()
+    workbook.save(binary)
+    binary.seek(0)
+    return StreamingResponse(
+        binary,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="bidder-database-{stamp}.xlsx"'},
+    )
 
 
 def build_export(fmt, records):
