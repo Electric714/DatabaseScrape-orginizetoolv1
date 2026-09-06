@@ -202,13 +202,14 @@ class OshaEstablishmentAdapter:
             terms = []
             for alias in aliases:
                 cleaned = clean_search_term(alias)
-                if cleaned:
-                    terms.append(cleaned)
                 core = company_core(alias)
-                # A suffix-free variant catches OSHA punctuation/legal-suffix differences,
-                # but avoid making very short numeric names broader than necessary.
-                if core and core != normalize_match_text(cleaned) and (len(core) >= 8 or " " in core):
-                    terms.append(core)
+                # OSHA recommends using only as many words as needed because stored
+                # establishment spelling varies. Use one conservative suffix-free
+                # term per legal/related name when it remains distinctive; otherwise
+                # keep the fuller cleaned name. This keeps the 24-company POC bounded.
+                preferred = core if core and (len(core) >= 8 or " " in core) else cleaned
+                if preferred:
+                    terms.append(preferred)
             deduped_terms = []
             seen_terms = set()
             for term in terms:
