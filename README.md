@@ -34,8 +34,32 @@ Blank values from a website never erase an existing master value. Dismissed find
 
 The master table can be searched and exported in the exact 30-column CSV, Excel, or JSON format expected by the existing bidder database.
 
+## OSHA proof of concept — Source 1
+
+The first real source integration is OSHA's Establishment Search:
+
+- user-provided legacy URL: `https://www.osha.gov/pls/imis/establishment.html`
+- current OSHA route used by the adapter: `https://www.osha.gov/ords/imis/establishment.html`
+- query endpoint: `/ords/imis/establishment.search`
+- inspection detail endpoint: `/ords/imis/establishment.inspection_detail`
+
+This adapter is **master-database driven**. It does not crawl OSHA generally. Before running it, import the law firm's bidder CSV. A scan then builds OSHA establishment searches only for the contractors and related-company names in that approved master database.
+
+OSHA's public search limits a single inspection-date query to ten years, so the adapter searches consecutive ten-year windows from 1972 through the current date. It searches open and closed cases and both inspections with and without violations. Result rows are accepted only when the OSHA establishment name exactly matches the contractor/related-company name after conservative punctuation and legal-suffix normalization. Unrelated fuzzy matches are ignored.
+
+For the proof of concept, the OSHA fields mean:
+
+- `osha = Y` — at least one exact-name OSHA inspection match was found.
+- `osha = N` — no exact-name inspection match was found **and the entire targeted scan completed without errors/limits**.
+- `osha_severe_violations` — sum of the inspection detail page's **current Serious + Willful + Repeat** violations across matched inspections.
+- `years` — years in which a matched inspection has at least one current Serious, Willful, or Repeat violation.
+
+The severe-violation definition is an explicit proof-of-concept rule and can be changed if the law firm's actual criterion differs. On a partial/error scan, positive OSHA existence can still be retained, but the adapter deliberately does not issue a negative finding or an aggregate severe count that could be incomplete.
+
+The adapter stores inspection IDs, detail URLs, dates, current violation categories, search terms, query count, and the aggregate-completeness flag as source evidence. These details remain outside the firm's flat 30-column export.
+
 ## Query-focused source integrations
-The six website names and URLs are **pending**. The interface has six numbered positions ready for them, clearly marked as not yet configured.
+Five website names and URLs are still **pending**. Source 1 is now the OSHA Establishment Search proof of concept; the remaining five positions are ready for the other sources.
 
 The master database, comparison/review workflow, exports, crawl engine, and generic fallback extractor are in place. What is **not finished yet** is the site-specific query logic. Once the actual sites are supplied, each adapter must be tested against real examples and should define: the contractor/company query inputs; search-form or public endpoint behavior; result matching and identity rules; pagination/detail-page navigation; which bidder fields that site is authoritative for; and exactly what constitutes a positive, negative, unknown, or historical finding.
 
