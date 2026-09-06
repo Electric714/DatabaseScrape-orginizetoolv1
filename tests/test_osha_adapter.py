@@ -119,7 +119,7 @@ def test_inspection_detail_and_aggregate_severe_criteria():
     assert "Serious + Willful + Repeat" in record["extra"]["severe_definition"]
 
 
-def test_negative_osha_result_requires_complete_query_set():
+def test_similar_name_candidate_stays_unknown_instead_of_false_negative():\n    adapter = OshaEstablishmentAdapter()\n    search_url = adapter.seed_urls([bidder()], today=date(2026, 9, 6))[0]\n    html = """<table><tr><th></th><th>#</th><th>Activity</th><th>Establishment Name</th></tr><tr><td></td><td>1</td><td><a href="/ords/imis/establishment.inspection_detail?id=777">777</a></td><td>A Lamp Concrete Contracting Inc.</td></tr></table>"""\n    adapter.links(html, search_url)\n    record, = adapter.finalize_records(complete=True)\n    assert record["osha"] == ""\n    assert record["extra"]["ambiguous_candidates"]\n    assert "manual identity review" in record["osha_details"]\n\n\ndef test_negative_osha_result_requires_complete_query_set():
     adapter = OshaEstablishmentAdapter()
     adapter.seed_urls([bidder()], today=date(2026, 9, 6))
     assert adapter.finalize_records(complete=False) == []
