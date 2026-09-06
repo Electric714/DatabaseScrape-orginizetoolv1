@@ -33,3 +33,31 @@ main{margin-left:214px;padding:0 40px;max-width:1920px}.topbar{height:91px;displ
 .bidder-table thead th:nth-child(1),
 .bidder-table thead th:nth-child(2) { z-index: 5; }
 .bidder-record-link { text-align: left; white-space: normal; }
+
+
+/* Baseline CSV + comparison review */
+.compare-actions { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+.comparison-summary { display:grid; grid-template-columns:repeat(4,minmax(140px,1fr)); gap:10px; margin:4px 0 16px; }
+.comparison-summary > div { border:1px solid var(--border, #d7dedf); border-radius:12px; padding:12px 14px; background:rgba(255,255,255,.45); }
+.comparison-summary span { display:block; color:var(--muted, #66777a); font-size:11px; text-transform:uppercase; letter-spacing:.07em; }
+.comparison-summary strong { display:block; margin-top:4px; font-size:20px; }
+.proposal-toolbar { display:flex; justify-content:space-between; align-items:center; gap:12px; margin:16px 0 10px; color:var(--muted, #66777a); }
+.proposal-table-wrap { max-height:520px; overflow:auto; }
+.proposal-table { min-width:1120px; }
+.proposal-table td { vertical-align:top; }
+.change-field { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:11px; font-weight:750; }
+.old-value,.new-value { display:block; border-radius:8px; padding:7px 9px; white-space:pre-wrap; overflow-wrap:anywhere; }
+.old-value { background:#fff0f0; color:#8f2d2d; border:1px solid #f2c6c6; }
+.new-value { background:#edf9f1; color:#1e6a3d; border:1px solid #bfe3cb; font-weight:650; }
+.proposal-new td { background:rgba(46,125,79,.025); }
+.proposal-ambiguous td { background:rgba(190,129,39,.045); }
+.button.tiny { padding:7px 10px; font-size:12px; margin-right:6px; }
+@media (prefers-color-scheme: dark) {
+  .comparison-summary > div { background:rgba(255,255,255,.025); }
+  .old-value { background:rgba(170,52,52,.16); color:#ffc1c1; border-color:rgba(255,130,130,.25); }
+  .new-value { background:rgba(48,145,83,.16); color:#baf2cb; border-color:rgba(100,210,140,.25); }
+}
+@media (max-width:850px) {
+  .comparison-summary { grid-template-columns:repeat(2,minmax(120px,1fr)); }
+  .compare-actions { width:100%; }
+}

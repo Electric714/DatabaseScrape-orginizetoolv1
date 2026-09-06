@@ -1,7 +1,7 @@
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const safeUrl = value => { try { const u = new URL(value); return ['http:', 'https:'].includes(u.protocol) ? u.href : '#'; } catch { return '#'; } };
-const state = {sources: [], sourceSignature: '', jobsSignature: '', events: [], cursor: 0, paused: false, follow: true, level: 'all', offset: 0, total: 0, refreshing: false, online: null, deleteId: null, recordSequence: 0, detailSequence: 0, batchUpdating: false, editingId: null};
+const state = {sources: [], sourceSignature: '', jobsSignature: '', events: [], cursor: 0, paused: false, follow: true, level: 'all', offset: 0, total: 0, refreshing: false, online: null, deleteId: null, recordSequence: 0, detailSequence: 0, batchUpdating: false, editingId: null, bidderStatus: null, proposalSignature: ''};
 const PAGE_SIZE = 50;
 let toastTimer;
 
@@ -73,9 +73,127 @@ async function loadSources() {
 }
 async function loadStats() {
   const stats = await api('/api/stats');
-  for (const [key, id] of [['sources','statSources'],['records','statRecords'],['changed_24h','statChanged'],['running_jobs','statRunning']]) $(id).textContent = stats[key].toLocaleString();
+  $('statSources').textContent = stats.sources.toLocaleString();
+  $('statChanged').textContent = stats.changed_24h.toLocaleString();
+  $('statRunning').textContent = stats.running_jobs.toLocaleString();
+  if (!state.bidderStatus) state.bidderStatus = await api('/api/bidder/status');
+  $('statRecords').textContent = state.bidderStatus.master_total.toLocaleString();
   $('runningHint').textContent = stats.running_jobs ? 'Saving information from research sites' : 'Ready to collect from configured sites';
 }
+async function loadBidderStatus() {
+  const status = await api('/api/bidder/status');
+  state.bidderStatus = status;
+  $('masterCount').textContent = status.master_total.toLocaleString();
+  $('sourceRecordCount').textContent = status.active_source_records.toLocaleString();
+  $('pendingUpdateCount').textContent = status.pending_updates.toLocaleString();
+  $('lastImport').textContent = status.latest_import ? new Date(status.latest_import.imported_at).toLocaleDateString() : 'Never';
+  $('baselineStatus').textContent = status.latest_import
+    ? status.master_total.toLocaleString() + ' contractors loaded from ' + status.latest_import.filename + '. Scraped findings are waiting for comparison/approval.'
+    : 'Upload the existing bidder CSV to use it as the master starting database.';
+  $('compareButton').disabled = status.master_total === 0 || status.active_source_records === 0;
+  return status;
+}
+
+async function importBidderCsv(file) {
+  if (!file) return;
+  if (!file.name.toLowerCase().endsWith('.csv')) { notify('Please choose a CSV file.', true); return; }
+  $('uploadCsvButton').disabled = true;
+  $('baselineStatus').textContent = 'Importing ' + file.name + '…';
+  try {
+    const response = await fetch('/api/bidder/import', {
+      method: 'POST',
+      headers: {'Content-Type':'text/csv', 'X-Filename': file.name},
+      body: file,
+      signal: AbortSignal.timeout(60000)
+    });
+    if (!response.ok) {
+      let detail = 'CSV import failed.';
+      try { detail = (await response.json()).detail || detail; } catch {}
+      throw new Error(detail);
+    }
+    const result = await response.json();
+    notify('Imported ' + result.rows_total + ' rows: ' + result.rows_inserted + ' new, ' + result.rows_updated + ' updated, ' + result.rows_unchanged + ' unchanged.');
+    localEvent('INFO', 'Bidder CSV imported: ' + file.name);
+    state.offset = 0;
+    await Promise.all([loadBidderStatus(), loadRecords(), loadProposals()]);
+    if (result.warnings?.length) notify(result.warnings.join(' '), true);
+  } catch (error) {
+    notify(error.message, true);
+    localEvent('ERROR', 'Bidder CSV import failed: ' + error.message);
+    await loadBidderStatus().catch(() => {});
+  } finally {
+    $('uploadCsvButton').disabled = false;
+    $('csvUpload').value = '';
+  }
+}
+
+async function compareBidderData() {
+  $('compareButton').disabled = true;
+  $('proposalStatus').textContent = 'Comparing collected source records with the approved bidder database…';
+  try {
+    const result = await api('/api/bidder/compare', {method:'POST'});
+    notify('Comparison complete: ' + result.field_changes + ' field changes, ' + result.new_contractors + ' new contractors, ' + result.ambiguous_matches + ' ambiguous matches.');
+    await Promise.all([loadBidderStatus(), loadProposals()]);
+  } catch (error) {
+    notify(error.message, true);
+    localEvent('ERROR', 'Bidder comparison failed: ' + error.message);
+  } finally {
+    const status = await loadBidderStatus().catch(() => state.bidderStatus);
+    $('compareButton').disabled = !status || status.master_total === 0 || status.active_source_records === 0;
+  }
+}
+
+function proposalContractor(p) {
+  return p.master_contractor || p.proposed?.contractor_name || 'Unknown contractor';
+}
+
+async function loadProposals() {
+  const proposals = await api('/api/bidder/proposals?status=pending&limit=1000');
+  const signature = JSON.stringify(proposals.map(p => [p.id,p.status,p.old_value,p.new_value]));
+  if (signature === state.proposalSignature) return;
+  state.proposalSignature = signature;
+  $('pendingUpdateCount').textContent = proposals.length.toLocaleString();
+  $('proposalStatus').textContent = proposals.length
+    ? proposals.length + ' proposed change' + (proposals.length === 1 ? '' : 's') + ' waiting for review.'
+    : 'No proposed updates waiting for review.';
+  $('proposals').innerHTML = proposals.length ? proposals.map(p => {
+    const contractor = proposalContractor(p);
+    const source = p.source_url
+      ? '<a href="' + esc(safeUrl(p.source_url)) + '" target="_blank" rel="noreferrer">' + esc(p.source_name || 'Open source') + ' ↗</a>'
+      : esc(p.source_name || 'Saved source record');
+    if (p.proposal_type === 'new_record') {
+      const summary = [p.proposed?.address_1, p.proposed?.city, p.proposed?.state, p.proposed?.zip].filter(Boolean).join(', ');
+      return '<tr class="proposal-new"><td><strong>' + esc(contractor) + '</strong></td><td><span class="change-field">NEW CONTRACTOR</span></td><td><span class="old-value">Not in master database</span></td><td><span class="new-value">' + esc(summary || 'New bidder record found') + '</span></td><td>' + source + '</td><td><button class="button primary tiny" data-apply-proposal="' + p.id + '">Add contractor</button><button class="text-button" data-dismiss-proposal="' + p.id + '">Dismiss</button></td></tr>';
+    }
+    if (p.proposal_type === 'ambiguous') {
+      return '<tr class="proposal-ambiguous"><td><strong>' + esc(contractor) + '</strong></td><td><span class="change-field">AMBIGUOUS MATCH</span></td><td><span class="old-value">Multiple master contractors share this name</span></td><td><span class="new-value">Manual match required</span></td><td>' + source + '</td><td><button class="text-button" data-dismiss-proposal="' + p.id + '">Dismiss</button></td></tr>';
+    }
+    return '<tr><td><strong>' + esc(contractor) + '</strong></td><td><span class="change-field">' + esc(p.field_name) + '</span></td><td><span class="old-value">' + esc(p.old_value || 'blank') + '</span></td><td><span class="new-value">' + esc(p.new_value || 'blank') + '</span></td><td>' + source + '</td><td><button class="button primary tiny" data-apply-proposal="' + p.id + '">Update</button><button class="text-button" data-dismiss-proposal="' + p.id + '">Keep old</button></td></tr>';
+  }).join('') : '<tr><td colspan="6" class="table-empty">Nothing is waiting for approval. Run Compare collected data after a collection finishes.</td></tr>';
+}
+
+async function applyProposal(id, button) {
+  button.disabled = true;
+  try {
+    await api('/api/bidder/proposals/' + id + '/apply', {method:'POST'});
+    notify('Approved change applied to the master bidder database.');
+    state.proposalSignature = '';
+    await Promise.all([loadBidderStatus(), loadProposals(), loadRecords()]);
+  } catch (error) { notify(error.message, true); }
+  finally { button.disabled = false; }
+}
+
+async function dismissProposal(id, button) {
+  button.disabled = true;
+  try {
+    await api('/api/bidder/proposals/' + id + '/dismiss', {method:'POST'});
+    notify('Proposed change dismissed. The master value was left alone.');
+    state.proposalSignature = '';
+    await Promise.all([loadBidderStatus(), loadProposals()]);
+  } catch (error) { notify(error.message, true); }
+  finally { button.disabled = false; }
+}
+
 async function loadJobs() {
   const jobs = await api('/api/jobs?limit=8');
   const signature = JSON.stringify(jobs);
@@ -84,10 +202,7 @@ async function loadJobs() {
   $('jobs').innerHTML = jobs.length ? jobs.map(j => '<article class="job"><div class="job-head"><strong>' + esc(j.source_name) + '</strong><span class="tag ' + esc(j.status) + '">' + esc(j.status) + '</span></div><span class="job-time">' + esc(humanDate(j.started_at, true)) + '</span><p class="job-message">' + esc(j.message || 'Waiting to begin…') + '</p><div class="job-stats"><span><b>' + j.pages_processed + '/' + j.pages_discovered + '</b> pages</span><span><b>' + j.records_found + '</b> found</span><span><b>' + j.records_new + '</b> new</span><span><b>' + j.records_updated + '</b> updated</span><span><b>' + j.errors + '</b> errors</span></div></article>').join('') : '<div class="job"><p class="job-message">No collections yet. Set up a research site, then choose Collect records.</p></div>';
 }
 function recordParams(extra = {}) {
-  const params = new URLSearchParams({...extra, q: $('search').value.trim(), field: $('fieldFilter').value});
-  if ($('sourceFilter').value) params.set('source_id', $('sourceFilter').value);
-  if ($('oshaFilter').value) params.set('osha_status', $('oshaFilter').value);
-  return params;
+  return new URLSearchParams({...extra, q: $('search').value.trim(), field: $('fieldFilter').value});
 }
 const OSHA_LABELS = {open: 'Open — source reported', closed: 'Closed — source reported', none_reported: 'None reported by source', unknown: 'Not reported / unknown'};
 const BIDDER_COLUMNS = ["id","contractor_name","related_companies","address_1","city","state","zip","additional_address","additional_address_city","additional_address_state","additional_address_zip","dfi","wc","wc_date","osha_severe_violations","years","osha","state_federal_debarment","mndol_ineligibility","public_works_projects_budget_time_quality_complaint","federal_court","circuit_court","ccap_show150","environmental_violations","prevailing_wage_violations","dwd","dwd_substance_abuse_plan","better_business_bureau_complaints","misc_violations","tax_liability"];
@@ -98,26 +213,25 @@ function oshaBadge(record) {
 async function loadRecords() {
   const sequence = ++state.recordSequence;
   const params = recordParams({limit: PAGE_SIZE, offset: state.offset});
-  const data = await api('/api/bidder-records?' + params);
+  const data = await api('/api/bidder/master?' + params);
   if (sequence !== state.recordSequence) return;
   state.total = data.total;
   if (state.offset && state.offset >= data.total) { state.offset = 0; return loadRecords(); }
-  const filtered = params.get('q') || params.get('source_id') || params.get('osha_status');
-  $('recordCount').textContent = data.total.toLocaleString() + ' bidder database records' + (filtered ? ' matching your filters.' : ' saved locally.');
-  $('pageInfo').textContent = data.total ? (state.offset + 1) + '–' + (state.offset + data.items.length) + ' of ' + data.total.toLocaleString() : 'No matching saved records';
+  const filtered = params.get('q') || $('fieldFilter').value !== 'all';
+  $('recordCount').textContent = data.total.toLocaleString() + ' approved bidder records' + (filtered ? ' matching your filters.' : ' in the master database.');
+  $('pageInfo').textContent = data.total ? (state.offset + 1) + '–' + (state.offset + data.items.length) + ' of ' + data.total.toLocaleString() : 'No matching bidder records';
   $('prevPage').disabled = state.offset === 0;
   $('nextPage').disabled = state.offset + PAGE_SIZE >= data.total;
   $('records').innerHTML = data.items.length ? data.items.map(r => {
     const cells = BIDDER_COLUMNS.map(column => {
       const value = r[column] ?? '';
-      if (column === 'contractor_name') {
-        return '<td><button class="record-button bidder-record-link" data-record="' + esc(r._record_id) + '" aria-label="View source evidence for ' + esc(value || 'this contractor') + '">' + esc(value || '—') + '</button></td>';
-      }
+      if (column === 'contractor_name') return '<td><strong>' + esc(value || '—') + '</strong></td>';
       return '<td>' + esc(value === '' ? '—' : value) + '</td>';
     }).join('');
     return '<tr>' + cells + '</tr>';
-  }).join('') : '<tr><td colspan="' + BIDDER_COLUMNS.length + '" class="table-empty"><strong>' + (filtered ? 'No bidder records match these filters.' : 'Your bidder database is ready.') + '</strong><p>' + (filtered ? 'Try another term or clear the filters.' : 'Set up a research site below and choose Collect records. Fields that a source does not provide will remain blank.') + '</p></td></tr>';
+  }).join('') : '<tr><td colspan="' + BIDDER_COLUMNS.length + '" class="table-empty"><strong>' + (filtered ? 'No bidder records match these filters.' : 'No master bidder database has been imported yet.') + '</strong><p>' + (filtered ? 'Try another search.' : 'Use Upload existing CSV below to load the law firm’s current database as the starting point.') + '</p></td></tr>';
 }
+
 async function viewRecord(id) {
   const sequence = ++state.detailSequence;
   $('recordDialogTitle').textContent = 'Research record';
@@ -175,7 +289,7 @@ async function refreshAll() {
     const health = await api('/api/health');
     setOnline(true);
     $('appVersion').textContent = health.version;
-    const results = await Promise.allSettled([loadSources(), loadStats(), loadJobs(), loadRecords(), loadLogs()]);
+    const results = await Promise.allSettled([loadSources(), loadBidderStatus(), loadStats(), loadJobs(), loadRecords(), loadProposals(), loadLogs()]);
     for (const result of results) if (result.status === 'rejected') localEvent('ERROR', 'Could not refresh a workspace panel: ' + result.reason.message);
     $('lastSync').textContent = 'Updated ' + new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
   } catch {
@@ -262,11 +376,11 @@ async function exportRecords(format, button) {
   button.disabled = true;
   try {
     const params = recordParams({format});
-    const response = await fetch('/api/export?' + params, {signal:AbortSignal.timeout(60000)});
+    const response = await fetch('/api/bidder/export?' + params, {signal:AbortSignal.timeout(60000)});
     if (!response.ok) { const error = await response.json(); throw new Error(error.detail || 'Export failed'); }
-    saveBlob(await response.blob(), 'research-records-' + new Date().toISOString().slice(0,10) + '.' + format);
-    notify('Matching research records exported with their source details.');
-  } catch (error) { notify(error.message, true); localEvent('ERROR', 'Record export failed: ' + error.message); }
+    saveBlob(await response.blob(), 'bidder-database-' + new Date().toISOString().slice(0,10) + '.' + format);
+    notify('Approved bidder database exported in the same 30-column layout.');
+  } catch (error) { notify(error.message, true); localEvent('ERROR', 'Bidder export failed: ' + error.message); }
   finally { button.disabled = false; }
 }
 async function exportLogs() {
@@ -304,6 +418,8 @@ document.addEventListener('click', event => {
     $('deleteDialog').showModal();
   }
   if (button.dataset.export) exportRecords(button.dataset.export, button);
+  if (button.dataset.applyProposal) applyProposal(+button.dataset.applyProposal, button);
+  if (button.dataset.dismissProposal) dismissProposal(+button.dataset.dismissProposal, button);
   if (button.dataset.logLevel) {
     state.level = button.dataset.logLevel;
     document.querySelectorAll('[data-log-level]').forEach(b => { b.classList.toggle('selected', b === button); b.setAttribute('aria-pressed', b === button); });
@@ -316,23 +432,26 @@ $('refreshSources').addEventListener('click', refreshAll);
 $('helpButton').addEventListener('click', () => $('helpDialog').showModal());
 const search = () => { state.offset = 0; loadRecords().catch(e => notify(e.message,true)); };
 $('recordSearchForm').addEventListener('submit', event => { event.preventDefault(); search(); });
-['sourceFilter', 'fieldFilter', 'oshaFilter'].forEach(id => $(id).addEventListener('change', search));
+$('fieldFilter').addEventListener('change', search);
 function clearFilters() {
   $('search').value = '';
   $('fieldFilter').value = 'all';
-  $('sourceFilter').value = '';
-  $('oshaFilter').value = '';
 }
 $('clearFilters').addEventListener('click', () => { clearFilters(); search(); $('search').focus(); });
 $('findRecords').addEventListener('click', () => { $('recordsSection').scrollIntoView({block:'start'}); $('search').focus({preventScroll:true}); });
 $('reviewOsha').addEventListener('click', () => {
   clearFilters();
-  $('oshaFilter').value = 'open';
+  $('fieldFilter').value = 'osha';
+  $('search').value = 'Y';
   search();
   $('recordsSection').scrollIntoView({block:'start'});
-  $('oshaFilter').focus({preventScroll:true});
-  notify('Showing saved records with an open OSHA status explicitly reported by their source.');
+  $('search').focus({preventScroll:true});
+  notify('Showing master bidder rows where the OSHA field contains Y.');
 });
+$('uploadCsvButton').addEventListener('click', () => $('csvUpload').click());
+$('csvUpload').addEventListener('change', () => importBidderCsv($('csvUpload').files?.[0]));
+$('compareButton').addEventListener('click', compareBidderData);
+$('refreshProposals').addEventListener('click', async () => { state.proposalSignature = ''; await Promise.all([loadBidderStatus(), loadProposals()]); });
 $('updateSites').addEventListener('click', updateSites);
 $('prevPage').addEventListener('click', () => { state.offset = Math.max(0, state.offset - PAGE_SIZE); loadRecords().catch(e => notify(e.message,true)); });
 $('nextPage').addEventListener('click', () => { state.offset += PAGE_SIZE; loadRecords().catch(e => notify(e.message,true)); });

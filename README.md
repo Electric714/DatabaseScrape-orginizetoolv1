@@ -16,6 +16,24 @@ The generic extractor recognizes the exact field names above plus common human-r
 
 A blank compliance field means **unknown or not supplied by that source**, not a clean record. Automated adapters must preserve source wording rather than infer legal conclusions from missing data.
 
+## Existing CSV → master database → reviewed updates
+
+The law firm's existing bidder CSV can now be uploaded directly from the workspace. The import keeps every bidder field as text, including ZIP codes and IDs, and merges matching rows by bidder ID first and then by normalized contractor name/address. An import **does not delete contractors that are absent from the uploaded file**.
+
+The uploaded rows become the approved **master bidder database**. Crawled website records remain separate source evidence. Clicking **Compare collected data** creates a review queue instead of overwriting the master automatically:
+
+- current master value is highlighted in red;
+- newly found value is highlighted in green;
+- each change includes the research source;
+- **Update** applies one proposed field change;
+- **Keep old** dismisses that proposal;
+- newly discovered contractors can be approved with **Add contractor**;
+- ambiguous contractor-name matches are flagged for manual review and cannot be applied blindly.
+
+Blank values from a website never erase an existing master value. Dismissed findings do not keep reappearing unless the source later reports a materially different value. Approved source-driven changes are written to a bidder master history table with their source URL and timestamp.
+
+The master table can be searched and exported in the exact 30-column CSV, Excel, or JSON format expected by the existing bidder database.
+
 ## The six websites
 The six website names and URLs are **pending**. The interface has six numbered positions ready for them, clearly marked as not yet configured.
 

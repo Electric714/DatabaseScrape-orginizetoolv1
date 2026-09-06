@@ -1,6 +1,7 @@
 import asyncio
 import functools
 from concurrent.futures import ThreadPoolExecutor
+import hashlib
 import json
 import sqlite3
 from contextlib import closing
@@ -9,6 +10,7 @@ from typing import Any
 
 from .config import DB_PATH
 from .normalizer import canonical_record, entity_key, record_hash
+from .bidder_schema import BIDDER_COLUMNS, BIDDER_DB_COLUMNS, bidder_row, bidder_master_row, normalize_match_text, bidder_values_equal
 
 
 def utcnow() -> str:
@@ -121,6 +123,60 @@ def _sync_init_db() -> None:
             );
             """
         )
+        bidder_sql = ",\n                ".join(f"{column} TEXT NOT NULL DEFAULT ''" for column in BIDDER_DB_COLUMNS)
+        conn.execute("""CREATE TABLE IF NOT EXISTS bidder_imports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            filename TEXT NOT NULL,
+            imported_at TEXT NOT NULL,
+            rows_total INTEGER NOT NULL DEFAULT 0,
+            rows_inserted INTEGER NOT NULL DEFAULT 0,
+            rows_updated INTEGER NOT NULL DEFAULT 0,
+            rows_unchanged INTEGER NOT NULL DEFAULT 0,
+            warnings_json TEXT NOT NULL DEFAULT '[]'
+        )""")
+        conn.execute(f"""CREATE TABLE IF NOT EXISTS bidder_master (
+            pk INTEGER PRIMARY KEY AUTOINCREMENT,
+            {bidder_sql},
+            contractor_norm TEXT NOT NULL DEFAULT '',
+            address_norm TEXT NOT NULL DEFAULT '',
+            source_import_id INTEGER REFERENCES bidder_imports(id),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )""")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_bidder_master_bidder_id ON bidder_master(bidder_id) WHERE bidder_id <> ''")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_bidder_master_contractor ON bidder_master(contractor_norm)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_bidder_master_address ON bidder_master(address_norm)")
+        conn.execute("""CREATE TABLE IF NOT EXISTS bidder_proposals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            signature TEXT NOT NULL,
+            master_pk INTEGER,
+            source_record_id INTEGER,
+            proposal_type TEXT NOT NULL,
+            field_name TEXT,
+            old_value TEXT NOT NULL DEFAULT '',
+            new_value TEXT NOT NULL DEFAULT '',
+            proposed_json TEXT NOT NULL DEFAULT '',
+            source_name TEXT NOT NULL DEFAULT '',
+            source_url TEXT NOT NULL DEFAULT '',
+            match_reason TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'pending',
+            detected_at TEXT NOT NULL,
+            resolved_at TEXT
+        )""")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_bidder_proposals_status ON bidder_proposals(status,id DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_bidder_proposals_master ON bidder_proposals(master_pk,field_name,status)")
+        conn.execute("""CREATE TABLE IF NOT EXISTS bidder_master_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            master_pk INTEGER NOT NULL,
+            field_name TEXT NOT NULL,
+            old_value TEXT NOT NULL DEFAULT '',
+            new_value TEXT NOT NULL DEFAULT '',
+            source_record_id INTEGER,
+            source_name TEXT NOT NULL DEFAULT '',
+            source_url TEXT NOT NULL DEFAULT '',
+            applied_at TEXT NOT NULL
+        )""")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_bidder_history_master ON bidder_master_history(master_pk,id DESC)")
         columns = {r["name"] for r in conn.execute("PRAGMA table_info(pages)")}
         if "rendered" not in columns:
             conn.execute("ALTER TABLE pages ADD COLUMN rendered INTEGER NOT NULL DEFAULT 0")

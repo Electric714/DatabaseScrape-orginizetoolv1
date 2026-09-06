@@ -2,6 +2,7 @@ import os
 import httpx
 import pytest
 from app.crawler import CrawlEngine
+from app.bidder_schema import BIDDER_COLUMNS
 
 
 def test_live_gui_smoke(database, monkeypatch):
@@ -57,20 +58,39 @@ def test_live_gui_smoke(database, monkeypatch):
                 page.locator("#delayMs").fill("0")
                 page.get_by_role("button", name="Save research site", exact=True).click()
                 page.get_by_role("button", name="Collect records", exact=True).wait_for()
-                page.get_by_role("button", name="Collect records", exact=True).click()
-                page.get_by_role("button", name="View source evidence for Example Builders P1", exact=True).wait_for(timeout=15000)
-                page.locator("#sourceFilter").select_option(label="GUI fixture")
-                page.wait_for_timeout(3500)
-                assert page.locator("#sourceFilter option:checked").inner_text() == "GUI fixture"
-                page.locator("#fieldFilter").select_option("owner")
-                page.locator("#search").fill("Sample Owner")
-                page.get_by_role("button", name="Search records", exact=True).click()
+                import csv, io
+                baseline_one = {column: "" for column in BIDDER_COLUMNS}
+                baseline_one.update({"id":"P1","contractor_name":"Example Builders P1","address_1":"12 Oak Rd",
+                                     "city":"Madison","state":"WI","osha":"N"})
+                baseline_two = {column: "" for column in BIDDER_COLUMNS}
+                baseline_two.update({"id":"P2","contractor_name":"Example Builders P2","address_1":"12 Oak Rd",
+                                     "city":"Madison","state":"WI"})
+                stream = io.StringIO()
+                writer = csv.DictWriter(stream, fieldnames=BIDDER_COLUMNS)
+                writer.writeheader()
+                writer.writerows([baseline_one, baseline_two])
+                page.locator("#csvUpload").set_input_files({
+                    "name":"baseline.csv","mimeType":"text/csv","buffer":stream.getvalue().encode()
+                })
                 from playwright.sync_api import expect
+                expect(page.locator("#masterCount")).to_have_text("2", timeout=10000)
+                expect(page.locator("#records")).to_contain_text("Example Builders P1", timeout=10000)
+
+                page.get_by_role("button", name="Collect records", exact=True).click()
+                expect(page.locator("#sourceRecordCount")).to_have_text("2", timeout=15000)
+                page.locator("#compareButton").click()
+                expect(page.locator("#proposals")).to_contain_text("osha", timeout=10000)
+                expect(page.locator("#proposals")).to_contain_text("N")
+                expect(page.locator("#proposals")).to_contain_text("Y")
+                page.locator("[data-apply-proposal]").first.click()
+                expect(page.locator("#pendingUpdateCount")).to_have_text("0", timeout=10000)
+
+                page.locator("#fieldFilter").select_option("contractor")
+                page.locator("#search").fill("Example Builders P1")
+                page.get_by_role("button", name="Search records", exact=True).click()
                 expect(page.locator("#records tr")).to_have_count(1)
                 expect(page.locator("#records")).to_contain_text("Example Builders P1")
-                page.get_by_role("button", name="View source evidence for Example Builders P1", exact=True).click()
-                expect(page.locator("#recordDetail")).to_contain_text("Illustrative fixture only")
-                page.get_by_role("button", name="Close record", exact=True).click()
+                expect(page.locator("#records")).to_contain_text("Y")
                 page.locator("#clearFilters").click()
                 from app import activity
                 from playwright.sync_api import expect
