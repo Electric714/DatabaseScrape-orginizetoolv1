@@ -10,6 +10,7 @@ from openpyxl import load_workbook
 from app import database as db, main
 from app.extractor import extract_records
 from app.normalizer import canonical_record, normalize_osha_status, record_hash
+from app.bidder_schema import BIDDER_COLUMNS
 
 
 @pytest.mark.parametrize("raw,expected", [
@@ -107,7 +108,8 @@ async def test_research_api_filters_details_and_matching_safe_exports(source):
     records = [
         {"external_id": "business-1", "company": "Builders LLC", "name": "Jordan Contact", "owner": "=OwnerName()",
          "address": "10 Oak Rd", "location": "Madison, WI", "osha_status": "Open",
-         "osha_details": "+Citation 123 source wording", "source_url": "https://fixture.test/one"},
+         "osha_details": "+Citation 123 source wording", "related_companies": "=OwnerName()",
+         "misc_violations": "+Citation 123 source wording", "source_url": "https://fixture.test/one"},
         {"external_id": "business-2", "company": "Jordan Company", "owner": "Different Owner",
          "address": "20 Oak Rd", "location": "Milwaukee, WI", "source_url": "https://fixture.test/two"},
         {"external_id": "business-3", "company": "Closed LLC", "owner": "Jordan Owner",
@@ -138,15 +140,24 @@ async def test_research_api_filters_details_and_matching_safe_exports(source):
         for endpoint in ("/api/records", "/api/export"):
             assert (await client.get(endpoint, params={"field": "owner); DROP TABLE records;"})).status_code == 422
             assert (await client.get(endpoint, params={"osha_status": "safe"})).status_code == 422
+        bidder = (await client.get("/api/bidder-records", params=query)).json()
+        assert bidder["total"] == 1
+        assert bidder["items"][0]["contractor_name"] == "Builders LLC"
+        assert bidder["items"][0]["city"] == "Madison" and bidder["items"][0]["state"] == "WI"
         exported = await client.get("/api/export", params={**query, "format": "json"})
         assert len(exported.json()) == 1
-        assert exported.json()[0]["owner"] == "=OwnerName()"
-        assert exported.json()[0]["osha_details"] == "+Citation 123 source wording"
+        assert list(exported.json()[0]) == BIDDER_COLUMNS
+        assert exported.json()[0]["contractor_name"] == "Builders LLC"
+        assert exported.json()[0]["related_companies"] == "=OwnerName()"
+        assert exported.json()[0]["misc_violations"] == "+Citation 123 source wording"
         response = await client.get("/api/export", params={**query, "format": "csv"})
         csv_rows = list(csv.DictReader(io.StringIO(response.content.decode("utf-8-sig"))))
-        assert len(csv_rows) == 1 and csv_rows[0]["owner"] == "'=OwnerName()"
-        assert csv_rows[0]["osha_details"] == "'+Citation 123 source wording"
+        assert list(csv_rows[0]) == BIDDER_COLUMNS
+        assert len(csv_rows) == 1 and csv_rows[0]["related_companies"] == "'=OwnerName()"
+        assert csv_rows[0]["misc_violations"] == "'+Citation 123 source wording"
         response = await client.get("/api/export", params={**query, "format": "xlsx"})
         book = load_workbook(io.BytesIO(response.content))
+        assert book.active.title == "Bidder Database"
+        assert [cell.value for cell in book.active[1]] == BIDDER_COLUMNS
         assert book.active.max_row == 2
         assert all(cell.data_type != "f" for row in book.active for cell in row)
