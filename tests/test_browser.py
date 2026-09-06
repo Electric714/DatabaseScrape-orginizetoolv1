@@ -59,18 +59,21 @@ def test_live_gui_smoke(database, monkeypatch):
                 page.get_by_role("button", name="Save research site", exact=True).click()
                 page.get_by_role("button", name="Collect records", exact=True).wait_for()
                 import csv, io
-                baseline = {column: "" for column in BIDDER_COLUMNS}
-                baseline.update({"id":"P1","contractor_name":"Example Builders P1","address_1":"12 Oak Rd",
-                                 "city":"Madison","state":"WI","osha":"N"})
+                baseline_one = {column: "" for column in BIDDER_COLUMNS}
+                baseline_one.update({"id":"P1","contractor_name":"Example Builders P1","address_1":"12 Oak Rd",
+                                     "city":"Madison","state":"WI","osha":"N"})
+                baseline_two = {column: "" for column in BIDDER_COLUMNS}
+                baseline_two.update({"id":"P2","contractor_name":"Example Builders P2","address_1":"12 Oak Rd",
+                                     "city":"Madison","state":"WI"})
                 stream = io.StringIO()
                 writer = csv.DictWriter(stream, fieldnames=BIDDER_COLUMNS)
                 writer.writeheader()
-                writer.writerow(baseline)
+                writer.writerows([baseline_one, baseline_two])
                 page.locator("#csvUpload").set_input_files({
                     "name":"baseline.csv","mimeType":"text/csv","buffer":stream.getvalue().encode()
                 })
                 from playwright.sync_api import expect
-                expect(page.locator("#masterCount")).to_have_text("1", timeout=10000)
+                expect(page.locator("#masterCount")).to_have_text("2", timeout=10000)
                 expect(page.locator("#records")).to_contain_text("Example Builders P1", timeout=10000)
 
                 page.get_by_role("button", name="Collect records", exact=True).click()
