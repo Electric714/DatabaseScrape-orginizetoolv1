@@ -38,7 +38,7 @@ BIDDER_COLUMNS = [
 # Labels commonly seen in spreadsheets/forms for the law firm's bidder database.
 # Exact snake_case column names are also accepted by the generic extractor.
 BIDDER_FIELD_ALIASES = {
-    "id": {"id", "bidder id", "contractor id"},
+    "bidder_id": {"id", "bidder id", "contractor id"},
     "contractor_name": {"contractor_name", "contractor name", "bidder name"},
     "related_companies": {"related_companies", "related companies", "related company", "affiliated companies"},
     "address_1": {"address_1", "address 1", "primary address"},
@@ -88,7 +88,11 @@ def capture_bidder_fields(record: dict[str, Any], extra: dict[str, Any] | None =
     """Preserve law-firm bidder fields inside record provenance without losing generic fields."""
     result = dict(extra or {})
     bidder = dict(result.get("bidder_fields") or {})
+    if record.get("bidder_id") not in (None, ""):
+        bidder["id"] = str(record.get("bidder_id")).strip()
     for key in BIDDER_COLUMNS:
+        if key == "id":
+            continue
         if key in record and record.get(key) not in (None, ""):
             bidder[key] = str(record.get(key)).strip()
     if bidder:
