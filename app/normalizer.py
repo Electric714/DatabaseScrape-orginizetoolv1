@@ -4,6 +4,8 @@ import re
 from datetime import datetime
 from typing import Any
 
+from .bidder_schema import capture_bidder_fields
+
 PHONE_DIGITS = re.compile(r"\D+")
 WHITESPACE = re.compile(r"\s+")
 
@@ -54,26 +56,39 @@ def normalize_date(value: str) -> str:
 
 
 def canonical_record(record: dict[str, Any]) -> dict[str, Any]:
+    extra = capture_bidder_fields(record, record.get("extra") or {})
+    bidder = extra.get("bidder_fields") or {}
     raw_status = clean_text(record.get("osha_status"))
+    location = clean_text(record.get("location"))
+    if not location:
+        location = ", ".join(
+            value for value in (
+                clean_text(bidder.get("city")),
+                " ".join(value for value in (clean_text(bidder.get("state")), clean_text(bidder.get("zip"))) if value),
+            ) if value
+        )
     return {
         "name": clean_text(record.get("name")),
-        "company": clean_text(record.get("company")),
+        "company": clean_text(record.get("company")) or clean_text(bidder.get("contractor_name")),
         "owner": clean_text(record.get("owner")),
         "phone": normalize_phone(clean_text(record.get("phone"))),
-        "address": clean_text(record.get("address")),
-        "location": clean_text(record.get("location")),
+        "address": clean_text(record.get("address")) or clean_text(bidder.get("address_1")),
+        "location": location,
         "osha_status": normalize_osha_status(raw_status),
         "osha_details": clean_text(record.get("osha_details")) or (raw_status if raw_status != "unknown" else ""),
         "date": normalize_date(clean_text(record.get("date"))),
         "external_id": clean_text(record.get("external_id")),
         "source_url": clean_text(record.get("source_url")),
-        "extra": record.get("extra") or {},
+        "extra": extra,
     }
 
 
 def entity_key(record: dict[str, Any]) -> str:
     r = canonical_record(record)
-    if r["external_id"]:
+    bidder_id = clean_text((r.get("extra") or {}).get("bidder_fields", {}).get("id"))
+    if bidder_id:
+        identity = f"bidder|{bidder_id}"
+    elif r["external_id"]:
         identity = f"id|{r['external_id']}"
     elif r["name"] or r["company"]:
         identity = json.dumps(["named", r["source_url"], r["name"].casefold(), r["company"].casefold()])
