@@ -20,19 +20,121 @@ main{margin-left:214px;padding:0 40px;max-width:1920px}.topbar{height:91px;displ
 @media(max-width:760px){.brand{font-size:10px}.brand strong{font-size:12px}.sidebar{padding:16px}.sidebar nav{gap:0}.nav-link{font-size:0;padding:7px}.nav-icon{font-size:19px}.research-hero{padding:25px 0;display:block}.research-hero h1{font-size:32px;letter-spacing:-1.1px}.research-hero p{font-size:12px}.research-flow{display:none}.eyebrow{font-size:8px;letter-spacing:1px}.research-hero .hero-actions{gap:9px}.hero-actions .button{font-size:11px;padding:10px 12px;white-space:normal}.metrics{gap:20px 0;margin-bottom:23px}.metric-label{font-size:10px}.metrics>div{padding:0 10px!important}.metrics small{font-size:10px}.metric-denominator{font-size:10px}.records-panel .section-heading{padding:21px 18px 16px;gap:13px}.section-heading h2{font-size:21px}.section-heading p{font-size:11px}.research-filters{padding:0 18px 15px}.search-primary{flex-wrap:wrap}.search-primary .search-field{flex-basis:100%;padding:0 10px}.search-primary .search-field input{font-size:12px;padding:11px 0}.search-primary>.button{width:100%;padding:10px}.filter-options{gap:11px 9px}.filter-options label{font-size:10px}.filter-options select{font-size:11px;padding:9px 6px}.filter-options label:nth-child(3){grid-column:1/-1}.filter-options .text-button{padding-top:2px;padding-bottom:0}.database-note{padding:0 18px 15px;font-size:10px}.evidence-note{padding:0 18px 17px;font-size:10px}.records-panel .section-footer{font-size:10px;padding:13px 18px}.table-wrap{border-top:1px solid #edf1e7}.table-empty p{max-width:260px;margin-left:0;margin-right:0}.table-empty{text-align:left}.table-empty strong{max-width:260px;display:block}.pending-sites{padding:0 18px 19px;grid-template-columns:1fr}.pending-site{grid-template-columns:25px minmax(0,1fr) auto;gap:10px;padding:13px}.pending-site button{grid-column:3;grid-row:1;align-self:center;font-size:9px;padding:7px}.pending-site h3{font-size:11px}.pending-site p{font-size:9px}.sources-panel .section-footer{padding:13px 18px;font-size:9px}.sources-panel .section-heading{padding-left:18px;padding-right:18px}.sources-panel .section-heading>div{min-width:100%}.source-controls{grid-column:2;gap:7px}.source-info h3{font-size:13px}.source-details{font-size:9px}.scan-button,.settings-button{font-size:10px}.source-list{padding:0 18px}.record-modal{padding:22px}.record-modal h2{font-size:26px}.record-fields{gap:16px}.record-fields dt{font-size:9px}.record-fields dd{font-size:12px}.record-osha{padding:16px}.modal-actions .button{font-size:11px}.page-footer{font-size:9px;flex-wrap:wrap}.console-meta,.console-meta button{font-size:9px}}
 
 
-/* Bidder database: the law firm's reference sheet has 30 fixed columns.
-   Keep the exact column structure and make the wide sheet practical to review. */
-.bidder-table-wrap { overflow-x: auto; }
-.bidder-table { min-width: 5200px; table-layout: auto; }
-.bidder-table th { white-space: nowrap; font-size: 10px; letter-spacing: .035em; }
-.bidder-table td { min-width: 135px; max-width: 300px; white-space: normal; overflow-wrap: anywhere; }
-.bidder-table th:nth-child(1),
-.bidder-table td:nth-child(1) { position: sticky; left: 0; z-index: 3; min-width: 72px; background: var(--surface, #fff); }
-.bidder-table th:nth-child(2),
-.bidder-table td:nth-child(2) { position: sticky; left: 72px; z-index: 3; min-width: 230px; background: var(--surface, #fff); box-shadow: 8px 0 12px -12px rgba(20, 61, 66, .55); }
-.bidder-table thead th:nth-child(1),
-.bidder-table thead th:nth-child(2) { z-index: 5; }
-.bidder-record-link { text-align: left; white-space: normal; }
+/* Bidder database: 30 real columns, horizontally scrollable without crushing headers.
+   This intentionally overrides the old six-column records-table rules above. */
+.bidder-table-wrap {
+  width:100%;
+  overflow-x:auto;
+  overflow-y:hidden;
+  overscroll-behavior-x:contain;
+  scrollbar-gutter:stable;
+  border-top:1px solid #edf1e7;
+  background:#fbfcf8;
+}
+.records-panel .bidder-table {
+  width:max-content;
+  min-width:5200px;
+  table-layout:auto;
+}
+.records-panel .bidder-table th {
+  width:auto;
+  min-width:145px;
+  white-space:nowrap;
+  font-size:10px;
+  letter-spacing:.035em;
+}
+.records-panel .bidder-table td {
+  width:auto;
+  min-width:145px;
+  max-width:300px;
+  white-space:normal;
+  overflow-wrap:anywhere;
+  background:#fff;
+}
+.records-panel .bidder-table th:nth-child(1),
+.records-panel .bidder-table td:nth-child(1) {
+  width:82px;
+  min-width:82px;
+  max-width:82px;
+  position:sticky;
+  left:0;
+  z-index:4;
+}
+.records-panel .bidder-table th:nth-child(2),
+.records-panel .bidder-table td:nth-child(2) {
+  width:250px;
+  min-width:250px;
+  max-width:250px;
+  position:sticky;
+  left:82px;
+  z-index:4;
+  box-shadow:10px 0 14px -14px rgba(20,61,66,.8);
+}
+.records-panel .bidder-table thead th:nth-child(1),
+.records-panel .bidder-table thead th:nth-child(2) {
+  z-index:6;
+  background:#f9fbf6;
+}
+.records-panel .bidder-table tbody td:nth-child(1),
+.records-panel .bidder-table tbody td:nth-child(2) {
+  background:#fff;
+}
+.records-panel .bidder-table th:nth-child(3),
+.records-panel .bidder-table td:nth-child(3) { min-width:220px; }
+.records-panel .bidder-table th:nth-child(4),
+.records-panel .bidder-table td:nth-child(4) { min-width:210px; }
+.records-panel .bidder-table th:nth-child(5),
+.records-panel .bidder-table td:nth-child(5) { min-width:145px; }
+.records-panel .bidder-table th:nth-child(6),
+.records-panel .bidder-table td:nth-child(6) { min-width:90px; }
+.records-panel .bidder-table th:nth-child(7),
+.records-panel .bidder-table td:nth-child(7) { min-width:105px; }
+.records-panel .bidder-table th:nth-child(20),
+.records-panel .bidder-table td:nth-child(20) { min-width:330px; }
+.bidder-record-link { text-align:left; white-space:normal; }
+
+/* Master CSV import belongs at the top of the database, not below a 30-column table. */
+.master-import-bar {
+  margin:0 25px 18px;
+  padding:14px 15px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:16px;
+  border:1px solid #cfe1d2;
+  border-radius:14px;
+  background:linear-gradient(110deg,#f1f8ef,#e8f3ec);
+}
+.master-import-copy {
+  min-width:0;
+  display:flex;
+  align-items:center;
+  gap:12px;
+}
+.master-import-icon {
+  width:34px;
+  height:34px;
+  flex:0 0 34px;
+  display:grid;
+  place-items:center;
+  border-radius:10px;
+  background:#d8eadb;
+  color:#396b4e;
+  font-size:19px;
+  font-weight:700;
+}
+.master-import-copy strong {
+  display:block;
+  color:#365f46;
+  font-size:12px;
+}
+.master-import-copy p {
+  margin-top:3px;
+  color:#728977;
+  font-size:10px;
+  line-height:1.55;
+}
+.master-upload-button { flex:0 0 auto; }
 
 
 /* Baseline CSV + comparison review */
@@ -60,4 +162,10 @@ main{margin-left:214px;padding:0 40px;max-width:1920px}.topbar{height:91px;displ
 @media (max-width:850px) {
   .comparison-summary { grid-template-columns:repeat(2,minmax(120px,1fr)); }
   .compare-actions { width:100%; }
+}
+
+@media(max-width:760px){
+  .master-import-bar{margin:0 18px 16px;align-items:stretch;flex-direction:column}
+  .master-upload-button{width:100%}
+  .records-panel .bidder-table{min-width:5000px}
 }
