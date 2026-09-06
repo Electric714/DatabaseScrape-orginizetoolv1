@@ -90,6 +90,10 @@ async function loadBidderStatus() {
   $('baselineStatus').textContent = status.latest_import
     ? status.master_total.toLocaleString() + ' contractors loaded from ' + status.latest_import.filename + '. Scraped findings are waiting for comparison/approval.'
     : 'Upload the existing bidder CSV to use it as the master starting database.';
+  $('masterImportSummary').textContent = status.latest_import
+    ? status.master_total.toLocaleString() + ' approved contractors loaded from ' + status.latest_import.filename + '. Upload another CSV any time to refresh the master baseline.'
+    : 'Upload the existing 30-column CSV and it becomes the approved master database used for comparisons.';
+  $('uploadCsvButton').textContent = status.latest_import ? 'Import another CSV' : 'Upload master CSV';
   $('compareButton').disabled = status.master_total === 0 || status.active_source_records === 0;
   return status;
 }
@@ -229,7 +233,7 @@ async function loadRecords() {
       return '<td>' + esc(value === '' ? '—' : value) + '</td>';
     }).join('');
     return '<tr>' + cells + '</tr>';
-  }).join('') : '<tr><td colspan="' + BIDDER_COLUMNS.length + '" class="table-empty"><strong>' + (filtered ? 'No bidder records match these filters.' : 'No master bidder database has been imported yet.') + '</strong><p>' + (filtered ? 'Try another search.' : 'Use Upload existing CSV below to load the law firm’s current database as the starting point.') + '</p></td></tr>';
+  }).join('') : '<tr><td colspan="' + BIDDER_COLUMNS.length + '" class="table-empty"><strong>' + (filtered ? 'No bidder records match these filters.' : 'No master bidder database has been imported yet.') + '</strong><p>' + (filtered ? 'Try another search.' : 'Use Upload master CSV above to load the law firm’s current database as the starting point.') + '</p></td></tr>';
 }
 
 async function viewRecord(id) {

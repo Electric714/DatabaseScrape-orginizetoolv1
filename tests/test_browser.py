@@ -50,6 +50,27 @@ def test_live_gui_smoke(database, monkeypatch):
                 errors = []
                 page.on("pageerror", lambda error: errors.append(str(error)))
                 page.goto(f"http://127.0.0.1:{port}")
+                from playwright.sync_api import expect
+                expect(page.locator("#uploadCsvButton")).to_be_visible()
+                expect(page.locator("#uploadCsvButton")).to_have_text("Upload master CSV")
+                assert page.locator("#sourceSection").count() == 1
+                table_layout = page.evaluate("""() => {
+                    const wrap = document.querySelector('.bidder-table-wrap');
+                    const table = document.querySelector('.bidder-table');
+                    const first = table.querySelector('th:nth-child(1)');
+                    const second = table.querySelector('th:nth-child(2)');
+                    return {
+                        layout: getComputedStyle(table).tableLayout,
+                        scrollWidth: wrap.scrollWidth,
+                        clientWidth: wrap.clientWidth,
+                        firstWidth: first.getBoundingClientRect().width,
+                        secondWidth: second.getBoundingClientRect().width
+                    };
+                }""")
+                assert table_layout["layout"] == "auto"
+                assert table_layout["scrollWidth"] > table_layout["clientWidth"] * 2
+                assert table_layout["firstWidth"] >= 80
+                assert table_layout["secondWidth"] >= 240
                 page.get_by_role("button", name="Set up site 1", exact=True).click()
                 page.locator("#sourceName").fill("GUI fixture")
                 page.locator("#sourceUrl").fill("https://fixture.test/")
@@ -72,9 +93,26 @@ def test_live_gui_smoke(database, monkeypatch):
                 page.locator("#csvUpload").set_input_files({
                     "name":"baseline.csv","mimeType":"text/csv","buffer":stream.getvalue().encode()
                 })
-                from playwright.sync_api import expect
                 expect(page.locator("#masterCount")).to_have_text("2", timeout=10000)
+                expect(page.locator("#uploadCsvButton")).to_have_text("Import another CSV", timeout=10000)
                 expect(page.locator("#records")).to_contain_text("Example Builders P1", timeout=10000)
+                sticky_positions = page.evaluate("""() => {
+                    const wrap = document.querySelector('.bidder-table-wrap');
+                    wrap.scrollLeft = wrap.scrollWidth;
+                    const box = wrap.getBoundingClientRect();
+                    const first = document.querySelector('.bidder-table tbody td:nth-child(1)').getBoundingClientRect();
+                    const second = document.querySelector('.bidder-table tbody td:nth-child(2)').getBoundingClientRect();
+                    return {
+                        firstLeft: Math.round(first.left - box.left),
+                        secondLeft: Math.round(second.left - box.left),
+                        firstBg: getComputedStyle(document.querySelector('.bidder-table tbody td:nth-child(1)')).backgroundColor,
+                        secondBg: getComputedStyle(document.querySelector('.bidder-table tbody td:nth-child(2)')).backgroundColor
+                    };
+                }""")
+                assert abs(sticky_positions["firstLeft"]) <= 2
+                assert 80 <= sticky_positions["secondLeft"] <= 85
+                assert sticky_positions["firstBg"] != "rgba(0, 0, 0, 0)"
+                assert sticky_positions["secondBg"] != "rgba(0, 0, 0, 0)"
 
                 page.get_by_role("button", name="Collect records", exact=True).click()
                 expect(page.locator("#sourceRecordCount")).to_have_text("2", timeout=15000)

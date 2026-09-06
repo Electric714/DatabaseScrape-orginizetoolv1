@@ -57,8 +57,13 @@
   <div class="workspace-grid">
     <div class="main-column">
       <section class="surface records-panel" id="recordsSection" aria-labelledby="recordsTitle">
-        <div class="section-heading"><div><div class="section-kicker">SEARCH / BIDDER DATABASE</div><h2 id="recordsTitle">Bidder database</h2><p id="recordCount">Search information already collected from your research sites.</p></div><div class="export-buttons" aria-label="Export filtered research records"><button data-export="csv" title="Download filtered records as CSV">CSV</button><button data-export="xlsx" title="Download filtered records as Excel">Excel</button><button data-export="json" title="Download filtered records as JSON">JSON</button></div></div>
-        <form id="recordSearchForm" class="research-filters" role="search" aria-label="Search the saved local database">
+        <div class="section-heading"><div><div class="section-kicker">MASTER / BIDDER DATABASE</div><h2 id="recordsTitle">Bidder database</h2><p id="recordCount">Search the approved master database.</p></div><div class="export-buttons" aria-label="Export approved master database"><button data-export="csv" title="Download master database as CSV">CSV</button><button data-export="xlsx" title="Download master database as Excel">Excel</button><button data-export="json" title="Download master database as JSON">JSON</button></div></div>
+        <div class="master-import-bar" id="masterImportBar">
+          <div class="master-import-copy"><span class="master-import-icon" aria-hidden="true">↑</span><div><strong>Start with the firm's existing bidder database</strong><p id="masterImportSummary">Upload the existing 30-column CSV and it becomes the approved master database used for comparisons.</p></div></div>
+          <button class="button primary master-upload-button" id="uploadCsvButton" type="button">Upload master CSV</button>
+          <input id="csvUpload" type="file" accept=".csv,text/csv" hidden>
+        </div>
+        <form id="recordSearchForm" class="research-filters" role="search" aria-label="Search the approved master bidder database">
           <div class="search-primary"><label class="search-field"><span aria-hidden="true">⌕</span><input id="search" placeholder="Search contractor, address, DFI, WC, OSHA, courts, violations…" aria-label="Search saved bidder database" autocomplete="off"></label><button class="button primary" id="searchBtn" type="submit">Search records</button></div>
           <div class="filter-options">
             <label>Search in<select id="fieldFilter"><option value="all">All bidder fields</option><option value="contractor">Contractor / related companies</option><option value="address">Addresses</option><option value="compliance">Compliance / legal fields</option><option value="osha">OSHA</option><option value="dfi">DFI</option><option value="wc">Workers comp</option><option value="federal_court">Federal court</option><option value="circuit_court">Circuit court</option></select></label>
@@ -70,12 +75,12 @@
         <div class="database-note"><span aria-hidden="true">▤</span><p>The table and exports follow the law firm’s 30-column bidder database structure exactly. Source URLs, collection timestamps, and change history are still retained underneath each saved record.</p></div>
         <div class="table-wrap bidder-table-wrap" tabindex="0" role="region" aria-label="Bidder database results; scroll horizontally for all 30 fields"><table class="bidder-table"><thead><tr><th>id</th><th>contractor_name</th><th>related_companies</th><th>address_1</th><th>city</th><th>state</th><th>zip</th><th>additional_address</th><th>additional_address_city</th><th>additional_address_state</th><th>additional_address_zip</th><th>dfi</th><th>wc</th><th>wc_date</th><th>osha_severe_violations</th><th>years</th><th>osha</th><th>state_federal_debarment</th><th>mndol_ineligibility</th><th>public_works_projects_budget_time_quality_complaint</th><th>federal_court</th><th>circuit_court</th><th>ccap_show150</th><th>environmental_violations</th><th>prevailing_wage_violations</th><th>dwd</th><th>dwd_substance_abuse_plan</th><th>better_business_bureau_complaints</th><th>misc_violations</th><th>tax_liability</th></tr></thead><tbody id="records"></tbody></table></div>
         <div class="section-footer"><span id="pageInfo" role="status">No records yet</span><div class="pagination"><button id="prevPage" aria-label="Previous page" disabled>←</button><button id="nextPage" aria-label="Next page" disabled>→</button></div></div>
-        <p class="evidence-note">Blank cells remain unknown until a source supplies an approved value. Scraped findings never overwrite this table automatically; they appear in the review queue below first.</p>
+        <p class="evidence-note">Blank cells remain unknown until a source supplies an approved value. Scraped findings never overwrite this table automatically; they appear in the review queue below first. Scroll the table horizontally to review all 30 fields.</p>
       </section>
       <section class="surface compare-panel" id="compareSection" aria-labelledby="compareTitle">
         <div class="section-heading">
           <div><div class="section-kicker">IMPORT / COMPARE / APPROVE</div><h2 id="compareTitle">Baseline database &amp; proposed updates</h2><p id="baselineStatus">Upload the existing bidder CSV to use it as the master starting database.</p></div>
-          <div class="compare-actions"><button class="button subtle" id="uploadCsvButton">Upload existing CSV</button><button class="button primary" id="compareButton">Compare collected data</button><input id="csvUpload" type="file" accept=".csv,text/csv" hidden></div>
+          <div class="compare-actions"><button class="button primary" id="compareButton">Compare collected data</button></div>
         </div>
         <div class="comparison-summary">
           <div><span>Master contractors</span><strong id="masterCount">0</strong></div>
@@ -89,7 +94,7 @@
           <table class="proposal-table"><thead><tr><th>Contractor</th><th>Field</th><th>Current database value</th><th>Newly found value</th><th>Source</th><th>Decision</th></tr></thead><tbody id="proposals"><tr><td colspan="6" class="table-empty">Upload the existing CSV, collect source data, then compare it here.</td></tr></tbody></table>
         </div>
       </section>
-      <section class="surface sources-panel id="sourceSection" aria-labelledby="sourcesTitle">
+      <section class="surface sources-panel" id="sourceSection" aria-labelledby="sourcesTitle">
         <div class="section-heading"><div><div class="section-kicker">COLLECT / SIX RESEARCH SITES</div><h2 id="sourcesTitle">Your research sites <span id="sourceCount">0 / 6</span></h2><p id="siteSetupNote">The six site names and addresses are pending. Set up each site when available.</p></div><button class="button subtle small" id="updateSites" disabled>Update configured sites</button></div>
         <div id="sources"><div class="loading-state">Loading your research sites…</div></div>
         <div class="section-footer"><span>Collected records are saved to the local database.</span><button class="text-button" id="refreshSources">↻ Refresh status</button></div>
