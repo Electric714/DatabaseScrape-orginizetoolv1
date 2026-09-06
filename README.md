@@ -45,12 +45,12 @@ The first real source integration is OSHA's Establishment Search:
 
 This adapter is **master-database driven**. It does not crawl OSHA generally. Before running it, import the law firm's bidder CSV. A scan then builds OSHA establishment searches only for the contractors and related-company names in that approved master database.
 
-OSHA's public search limits a single inspection-date query to ten years, so the adapter searches consecutive ten-year windows from 1972 through the current date. It searches open and closed cases and both inspections with and without violations. Result rows are accepted only when the OSHA establishment name exactly matches the contractor/related-company name after conservative punctuation and legal-suffix normalization. Unrelated fuzzy matches are ignored.
+OSHA's public search limits a single inspection-date query to ten years, so the adapter searches consecutive ten-year windows from 1972 through the current date. It searches open and closed cases and both inspections with and without violations. Result rows are accepted automatically only when the OSHA establishment name exactly matches the contractor/related-company name after conservative punctuation and legal-suffix normalization. Similar names are retained as unresolved candidates so a spelling variation cannot silently create a false negative; they are not treated as authoritative matches.
 
 For the proof of concept, the OSHA fields mean:
 
 - `osha = Y` — at least one exact-name OSHA inspection match was found.
-- `osha = N` — no exact-name inspection match was found **and the entire targeted scan completed without errors/limits**.
+- `osha = N` — no exact-name inspection match and no plausible similar-name candidate was found **and the entire targeted scan completed without errors/limits**. Similar-but-unresolved names remain unknown rather than being converted to N.
 - `osha_severe_violations` — sum of the inspection detail page's **current Serious + Willful + Repeat** violations across matched inspections.
 - `years` — years in which a matched inspection has at least one current Serious, Willful, or Repeat violation.
 
