@@ -173,6 +173,7 @@ class OshaEstablishmentAdapter:
     query_mode = True
     always_parse = True
     direct_browser = True
+    visible_browser = True
     fail_fast_access_errors = True
     browser_prime_url = f"{OSHA_BASE}{OSHA_FORM_PATH}"
     # Proof-of-concept override: the OSHA adapter is already hard-limited to

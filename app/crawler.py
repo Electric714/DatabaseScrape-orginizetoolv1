@@ -141,7 +141,10 @@ class BrowserRenderer:
             if self.playwright is None:
                 from playwright.async_api import async_playwright
                 self.playwright = await async_playwright().start()
-                self.browser = await self.playwright.chromium.launch(headless=True)
+                visible = bool(getattr(self.engine.adapter, "visible_browser", False))
+                self.browser = await self.playwright.chromium.launch(headless=not visible)
+                if visible:
+                    activity.emit("INFO", "Opened visible Chromium window for source collection", source_id=self.engine.source_id, job_id=self.engine.job_id)
             if self.direct_context is None:
                 self.direct_context = await self.browser.new_context(service_workers="block")
                 await self.direct_context.route_web_socket("**/*", lambda ws: ws.close())
