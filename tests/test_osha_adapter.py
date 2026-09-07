@@ -158,7 +158,7 @@ async def test_osha_query_mode_crawls_master_and_proposes_update(database):
     def site(request):
         path = request.url.path
         if path == "/robots.txt":
-            return httpx.Response(200, text="User-agent: *\nAllow: /\n")
+            raise AssertionError("OSHA proof-of-concept must not request robots.txt")
         if path == OSHA_SEARCH_PATH:
             query = parse_qs(request.url.query.decode())
             # Put the known historical inspection in one decade. All other

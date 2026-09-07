@@ -325,7 +325,7 @@ function openSource(slot, existing = null, preset = null) {
     $('concurrency').value = '2';
     $('delayMs').value = '500';
     $('maxDepth').value = '12';
-    $('respectRobots').value = 'true';
+    $('respectRobots').value = 'false';
     $('sourceDialog').querySelector('.modal-intro').textContent = 'OSHA proof of concept. This source searches only contractors and related-company names already loaded in the master bidder database.';
     $('sourceDialog').querySelector('.setup-note').textContent = 'Import the master bidder CSV first. OSHA searches run in ten-year windows from 1972 to today and retain source evidence for review before any master value changes.';
   }

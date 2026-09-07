@@ -45,6 +45,8 @@ The first real source integration is OSHA's Establishment Search:
 
 This adapter is **master-database driven**. It does not crawl OSHA generally. Before running it, import the law firm's bidder CSV. A scan then builds OSHA establishment searches only for the contractors and related-company names in that approved master database.
 
+For this proof of concept, the OSHA adapter explicitly **skips the generic `robots.txt` policy gate**. The adapter remains hard-limited to `www.osha.gov` and only the public establishment search and inspection-detail endpoints. This override applies to the OSHA POC adapter only; it does not globally disable crawl-policy checks for future sources.
+
 OSHA's public search limits a single inspection-date query to ten years, so the adapter searches consecutive ten-year windows from 1972 through the current date. It searches open and closed cases and both inspections with and without violations. Result rows are accepted automatically only when the OSHA establishment name exactly matches the contractor/related-company name after conservative punctuation and legal-suffix normalization. Similar names are retained as unresolved candidates so a spelling variation cannot silently create a false negative; they are not treated as authoritative matches.
 
 For the proof of concept, the OSHA fields mean:
