@@ -10,6 +10,7 @@ from bs4 import BeautifulSoup
 
 from .bidder_schema import normalize_match_text
 
+OSHA_FORM_PATH = "/ords/imis/establishment.html"
 OSHA_SEARCH_PATH = "/ords/imis/establishment.search"
 OSHA_DETAIL_PATH = "/ords/imis/establishment.inspection_detail"
 OSHA_BASE = "https://www.osha.gov"
@@ -171,9 +172,12 @@ class OshaEstablishmentAdapter:
 
     query_mode = True
     always_parse = True
+    direct_browser = True
+    fail_fast_access_errors = True
+    browser_prime_url = f"{OSHA_BASE}{OSHA_FORM_PATH}"
     # Proof-of-concept override: the OSHA adapter is already hard-limited to
-    # the public establishment search/detail endpoints, so do not block the
-    # run on the site's robots.txt response.
+    # the public establishment form/search/detail endpoints, so do not block
+    # the run on the site's robots.txt response.
     ignore_robots = True
 
     def __init__(self):
@@ -240,6 +244,12 @@ class OshaEstablishmentAdapter:
         if (parts.hostname or "").lower() != "www.osha.gov":
             return False
         return parts.path.lower() in {OSHA_SEARCH_PATH, OSHA_DETAIL_PATH}
+
+    def browser_allowed_url(self, url: str) -> bool:
+        parts = urlsplit(url)
+        if (parts.hostname or "").lower() != "www.osha.gov":
+            return False
+        return parts.path.lower() in {OSHA_FORM_PATH, OSHA_SEARCH_PATH, OSHA_DETAIL_PATH}
 
     def _contexts_for_search(self, url: str) -> list[str]:
         return self.term_contexts.get(normalize_match_text(_query_term(url)), [])
