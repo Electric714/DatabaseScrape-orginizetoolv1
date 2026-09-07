@@ -81,6 +81,8 @@ class BrowserRenderer:
     def __init__(self, engine):
         self.engine = engine
         self.playwright = self.browser = self.context = None
+        self.direct_context = self.direct_page = None
+        self.direct_primed = False
         self.lock = asyncio.Lock()
 
     async def fetch(self, client, url):
@@ -128,7 +130,88 @@ class BrowserRenderer:
             finally:
                 await page.close()
 
+    async def fetch_direct(self, url):
+        """Use Chromium's own network stack for a narrowly-scoped source adapter.
+
+        This is intentionally separate from the generic guarded browser renderer.
+        It is enabled only by adapters that explicitly opt in and define the exact
+        public document URLs Chromium may navigate to.
+        """
+        async with self.lock:
+            if self.playwright is None:
+                from playwright.async_api import async_playwright
+                self.playwright = await async_playwright().start()
+                self.browser = await self.playwright.chromium.launch(headless=True)
+            if self.direct_context is None:
+                self.direct_context = await self.browser.new_context(service_workers="block")
+                await self.direct_context.route_web_socket("**/*", lambda ws: ws.close())
+                self.direct_page = await self.direct_context.new_page()
+
+                async def route_request(route):
+                    request = route.request
+                    try:
+                        if request.resource_type != "document":
+                            await route.abort()
+                            return
+                        if request.method != "GET":
+                            raise ValueError("Direct browser non-GET request blocked")
+                        value = canonicalize_url(request.url)
+                        self.engine._check_request(value, robots=False)
+                        allowed = getattr(self.engine.adapter, "browser_allowed_url", self.engine.adapter.allowed_url)
+                        if not allowed(value):
+                            raise ValueError("Direct browser navigation outside adapter boundary")
+                        await route.continue_()
+                    except Exception:
+                        await route.abort()
+
+                await self.direct_page.route("**/*", route_request)
+
+            prime_url = getattr(self.engine.adapter, "browser_prime_url", None)
+            if prime_url and not self.direct_primed:
+                await self.engine._throttle()
+                prime_response = await self.direct_page.goto(
+                    prime_url, wait_until="domcontentloaded", timeout=60000
+                )
+                if not prime_response:
+                    raise ValueError("OSHA browser session could not open the source landing page")
+                prime_status = prime_response.status
+                if prime_status >= 400:
+                    raise ValueError(f"OSHA browser session landing page HTTP {prime_status}")
+                self.direct_primed = True
+                activity.emit(
+                    "INFO", "Browser session established for source-specific collection",
+                    source_id=self.engine.source_id, job_id=self.engine.job_id, url=prime_url,
+                )
+
+            await self.engine._throttle()
+            response = await self.direct_page.goto(
+                url,
+                wait_until="domcontentloaded",
+                timeout=60000,
+                referer=prime_url if prime_url and url != prime_url else None,
+            )
+            if not response:
+                raise ValueError("Browser navigation returned no response")
+            html = await self.direct_page.content()
+            if len(html.encode()) > MAX_BODY_BYTES:
+                raise ValueError("Rendered page exceeds body limit")
+            headers = await response.all_headers()
+            return FetchResult(
+                self.direct_page.url,
+                response.status,
+                html,
+                headers,
+                rendered=True,
+                body=html.encode("utf-8", errors="replace"),
+            )
+
     async def close(self):
+        if self.direct_page:
+            await self.direct_page.close()
+        if self.direct_context:
+            await self.direct_context.close()
+        if self.context:
+            await self.context.close()
         if self.browser:
             await self.browser.close()
         if self.playwright:
@@ -264,6 +347,10 @@ class CrawlEngine:
             activity.emit("ERROR", "Page could not be processed", source_id=self.source_id, job_id=self.job_id, url=url, error=str(exc))
             await db.increment_job(self.job_id, errors=1)
             await db.upsert_page(self.source_id, url, last_error=str(exc)[:1000])
+            if getattr(self.adapter, "fail_fast_access_errors", False) and (
+                "HTTP 403" in str(exc) or "access challenge" in str(exc).lower()
+            ):
+                raise
             return []
         finally:
             self.processed += 1
@@ -335,6 +422,13 @@ class CrawlEngine:
         await db.increment_job(self.job_id, records_found=len(observations))
 
     async def _fetch(self, client, url, cached):
+        if getattr(self.adapter, "direct_browser", False):
+            activity.emit(
+                "INFO", "Fetching source page in Chromium session",
+                source_id=self.source_id, job_id=self.job_id, url=url,
+            )
+            return await self.renderer.fetch_direct(url)
+
         headers = {}
         if cached and cached.get("fetch_mode") == self.render_mode and not self.force_full and not cached.get("rendered") and self.render_mode != "browser" and not getattr(self.adapter, "always_parse", False):
             if cached.get("etag"):
