@@ -171,6 +171,10 @@ class OshaEstablishmentAdapter:
 
     query_mode = True
     always_parse = True
+    # Proof-of-concept override: the OSHA adapter is already hard-limited to
+    # the public establishment search/detail endpoints, so do not block the
+    # run on the site's robots.txt response.
+    ignore_robots = True
 
     def __init__(self):
         self.contractors: dict[str, dict] = {}
