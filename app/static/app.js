@@ -321,13 +321,13 @@ function openSource(slot, existing = null, preset = null) {
   if (!existing && preset === 'osha') {
     $('sourceName').value = 'OSHA Establishment Search';
     $('sourceUrl').value = 'https://www.osha.gov/ords/imis/establishment.html';
-    $('renderMode').value = 'http';
+    $('renderMode').value = 'browser';
     $('concurrency').value = '2';
     $('delayMs').value = '500';
     $('maxDepth').value = '12';
     $('respectRobots').value = 'false';
     $('sourceDialog').querySelector('.modal-intro').textContent = 'OSHA proof of concept. This source searches only contractors and related-company names already loaded in the master bidder database.';
-    $('sourceDialog').querySelector('.setup-note').textContent = 'Import the master bidder CSV first. OSHA searches run in ten-year windows from 1972 to today and retain source evidence for review before any master value changes.';
+    $('sourceDialog').querySelector('.setup-note').textContent = 'Import the master bidder CSV first. OSHA uses a restricted Chromium browser session for its public search pages, runs ten-year windows from 1972 to today, and retains source evidence for review before any master value changes.';
   }
   $('sourceDialog').querySelector('.advanced').open = Boolean(existing);
   $('sourceDialog').showModal();
