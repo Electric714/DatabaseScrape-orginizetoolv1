@@ -9,6 +9,7 @@ from app.crawler import CrawlEngine
 from app.models import SourceCreate
 from app.osha_adapter import (
     OSHA_DETAIL_PATH,
+    OSHA_FORM_PATH,
     OSHA_SEARCH_PATH,
     OshaEstablishmentAdapter,
     company_core,
@@ -64,6 +65,18 @@ def bidder(**changes):
     })
     row.update(changes)
     return row
+
+
+def test_osha_adapter_uses_scoped_browser_session():
+    adapter = OshaEstablishmentAdapter()
+    assert adapter.direct_browser is True
+    assert adapter.fail_fast_access_errors is True
+    assert adapter.browser_prime_url.endswith(OSHA_FORM_PATH)
+    assert adapter.browser_allowed_url("https://www.osha.gov" + OSHA_FORM_PATH)
+    assert adapter.browser_allowed_url("https://www.osha.gov" + OSHA_SEARCH_PATH + "?establishment=Example")
+    assert adapter.browser_allowed_url("https://www.osha.gov" + OSHA_DETAIL_PATH + "?id=123")
+    assert not adapter.browser_allowed_url("https://www.osha.gov/news")
+    assert not adapter.browser_allowed_url("https://example.com" + OSHA_SEARCH_PATH)
 
 
 def test_company_core_handles_osha_punctuation_and_state_prefixes():
