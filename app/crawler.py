@@ -156,6 +156,11 @@ class CrawlEngine:
         self.transport = transport  # Test dependency injection; never exposed by API.
         self.renderer = BrowserRenderer(self)
         self.adapter = adapter_for_url(self.start_url)
+        if getattr(self.adapter, "ignore_robots", False):
+            # Source-specific proof-of-concept adapters may explicitly opt out
+            # of the generic robots policy gate. The adapter still constrains
+            # hostname/path/request scope.
+            self.respect_robots = False
 
     async def run(self):
         activity.emit("INFO", "Scan started", source_id=self.source_id, job_id=self.job_id, url=self.start_url)
@@ -165,7 +170,13 @@ class CrawlEngine:
                 transport=self.transport or PublicTransport(), trust_env=False, follow_redirects=False,
                 timeout=DEFAULT_TIMEOUT_SECONDS, headers={"User-Agent": DEFAULT_USER_AGENT},
             ) as client:
-                await self._load_robots(client)
+                if getattr(self.adapter, "ignore_robots", False):
+                    activity.emit(
+                        "WARNING", "robots.txt policy check skipped for source-specific proof of concept",
+                        source_id=self.source_id, job_id=self.job_id, url=self.start_url,
+                    )
+                else:
+                    await self._load_robots(client)
                 if getattr(self.adapter, "query_mode", False):
                     master_rows = await bidder_master_db.all_rows()
                     if not master_rows:
