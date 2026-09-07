@@ -70,6 +70,7 @@ def bidder(**changes):
 def test_osha_adapter_uses_scoped_browser_session():
     adapter = OshaEstablishmentAdapter()
     assert adapter.direct_browser is True
+    assert adapter.visible_browser is True
     assert adapter.fail_fast_access_errors is True
     assert adapter.browser_prime_url.endswith(OSHA_FORM_PATH)
     assert adapter.browser_allowed_url("https://www.osha.gov" + OSHA_FORM_PATH)
