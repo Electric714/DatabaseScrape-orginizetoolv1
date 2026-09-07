@@ -422,7 +422,7 @@ class CrawlEngine:
         await db.increment_job(self.job_id, records_found=len(observations))
 
     async def _fetch(self, client, url, cached):
-        if getattr(self.adapter, "direct_browser", False):
+        if getattr(self.adapter, "direct_browser", False) and self.transport is None:
             activity.emit(
                 "INFO", "Fetching source page in Chromium session",
                 source_id=self.source_id, job_id=self.job_id, url=url,
