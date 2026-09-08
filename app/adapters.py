@@ -3,6 +3,7 @@ from urllib.parse import urlsplit
 
 from .extractor import discover_links, extract_records
 from .osha_adapter import OshaEstablishmentAdapter
+from .sam_adapter import SamExclusionsAdapter
 
 
 class SourceAdapter(Protocol):
@@ -32,6 +33,8 @@ ADAPTERS: dict[str, type[GenericAdapter]] = {
     "www.osha.gov": OshaEstablishmentAdapter,
     "apiprod.dol.gov": OshaEstablishmentAdapter,
     "api.dol.gov": OshaEstablishmentAdapter,
+    "api-alpha.sam.gov": SamExclusionsAdapter,
+    "api.sam.gov": SamExclusionsAdapter,
 }
 
 
