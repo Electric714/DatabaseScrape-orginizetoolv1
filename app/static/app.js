@@ -48,29 +48,44 @@ function updateCollectionButton() {
   $('updateSites').title = available ? 'Collect updated records from ' + available + ' available research sites' : (state.sources.length ? 'All configured sites are already collecting' : 'Set up a research site first');
 }
 async function loadSources() {
-  const sources = await api('/api/sources');
+  const [sources, dolStatus] = await Promise.all([
+    api('/api/sources'),
+    api('/api/integrations/dol')
+  ]);
   state.sources = sources;
+  state.dolStatus = dolStatus;
   $('sourceCount').textContent = sources.length < 6 ? sources.length + ' / 6' : sources.length + ' configured';
   $('navSources').textContent = sources.length < 6 ? sources.length + '/6' : sources.length;
   $('sitesHint').textContent = sources.length < 6 ? (6 - sources.length) + ' site' + (sources.length === 5 ? '' : 's') + ' awaiting setup' : 'Ready for collection and source review';
-  $('siteSetupNote').textContent = sources.length < 6 ? 'Six research sites are planned. Their names and addresses will be filled in when available.' : 'Collect from each site, then search its saved records above.';
+  $('siteSetupNote').textContent = sources.length < 6
+    ? 'OSHA is built in. The remaining research sites can be added as their names and addresses are finalized.'
+    : 'Collect from each source, then review its saved evidence.';
   updateCollectionButton();
-  const signature = JSON.stringify(sources);
+
+  const signature = JSON.stringify({sources, dolConfigured: dolStatus.configured});
   if (signature === state.sourceSignature) return;
   state.sourceSignature = signature;
+
   const selection = $('sourceFilter').value;
   $('sourceFilter').innerHTML = '<option value="">All research sites</option>' + sources.map(s => '<option value="' + s.id + '">' + esc(s.name) + '</option>').join('');
   $('sourceFilter').value = sources.some(s => String(s.id) === selection) ? selection : '';
+
+  const oshaHosts = new Set(['www.osha.gov', 'apiprod.dol.gov', 'api.dol.gov']);
+  const fixedOshaUrl = 'https://apiprod.dol.gov/v4/get/OSHA/inspection/json';
   const configured = sources.map((s, index) => {
     const running = isCollecting(s);
+    let isOsha = false;
+    try { isOsha = oshaHosts.has(new URL(s.start_url).hostname.toLowerCase()); } catch {}
+    if (isOsha) {
+      const keyState = dolStatus.configured ? 'API key configured' : 'API key required';
+      return '<article class="source-row"><div class="source-avatar" aria-hidden="true">' + (index + 1) + '</div><div class="source-info"><h3>OSHA / DOL Enforcement API</h3><a class="source-url" href="' + fixedOshaUrl + '" target="_blank" rel="noreferrer">' + fixedOshaUrl + '</a><div class="source-details"><span class="tag ' + (dolStatus.configured ? 'completed' : 'partial') + '">' + keyState + '</span><span>Built-in REST source</span><span>· ' + esc(humanDate(s.last_scan_at)) + '</span></div></div><div class="source-controls"><button class="settings-button" data-dol-key>Set API key</button><button class="scan-button" data-scan="' + s.id + '"' + (running || !dolStatus.configured ? ' disabled' : '') + '>' + (running ? 'Collecting…' : 'Collect OSHA') + '</button><button class="icon-button" data-full="' + s.id + '" aria-label="Recollect OSHA API records" title="Recollect OSHA API records, ignoring cached responses"' + (running || !dolStatus.configured ? ' disabled' : '') + '>↻</button></div></article>';
+    }
     return '<article class="source-row"><div class="source-avatar" aria-hidden="true">' + (index + 1) + '</div><div class="source-info"><h3>' + esc(s.name) + '</h3><a class="source-url" href="' + esc(safeUrl(s.start_url)) + '" target="_blank" rel="noreferrer">' + esc(s.start_url) + '</a><div class="source-details"><span class="tag ' + esc(s.last_status || '') + '">' + esc(s.last_status || 'Ready to collect') + '</span><span>' + (s.auto_scan ? 'Every ' + s.interval_minutes + ' min' : 'Manual collection') + '</span><span>· ' + esc(humanDate(s.last_scan_at)) + '</span></div></div><div class="source-controls"><button class="scan-button" data-scan="' + s.id + '"' + (running ? ' disabled' : '') + '>' + (running ? 'Collecting…' : 'Collect records') + '</button><button class="settings-button" data-edit="' + s.id + '">Edit settings</button><button class="icon-button" data-full="' + s.id + '" aria-label="Recollect all pages from ' + esc(s.name) + '" title="Recollect all pages, ignoring cached pages"' + (running ? ' disabled' : '') + '>↻</button><button class="icon-button" data-delete="' + s.id + '" aria-label="Delete ' + esc(s.name) + '" title="Remove research site"' + (running ? ' disabled' : '') + '>×</button></div></article>';
   }).join('');
-  const oshaHosts = new Set(['www.osha.gov', 'apiprod.dol.gov', 'api.dol.gov']);
-  const hasOsha = sources.some(s => { try { return oshaHosts.has(new URL(s.start_url).hostname.toLowerCase()); } catch { return false; } });
+
   const pending = Array.from({length: Math.max(0, 6 - sources.length)}, (_, index) => {
     const number = sources.length + index + 1;
-    const oshaPreset = !hasOsha && index === 0;
-    return '<article class="pending-site"><span class="pending-number" aria-hidden="true">' + number + '</span><div><h3>' + (oshaPreset ? 'OSHA / DOL Enforcement API' : 'Research site ' + number) + '</h3><p>' + (oshaPreset ? 'REST API · queries imported master contractors only' : 'Name and website address pending') + '</p></div><button class="button subtle small" data-open-source="' + number + '"' + (oshaPreset ? ' data-preset="osha"' : '') + '>' + (oshaPreset ? 'Set up OSHA' : 'Set up site ' + number) + '</button></article>';
+    return '<article class="pending-site"><span class="pending-number" aria-hidden="true">' + number + '</span><div><h3>Research site ' + number + '</h3><p>Name and website address pending</p></div><button class="button subtle small" data-open-source="' + number + '">Set up site ' + number + '</button></article>';
   }).join('');
   $('sources').innerHTML = (configured ? '<div class="source-list">' + configured + '</div>' : '') + (pending ? '<div class="pending-sites">' + pending + '</div>' : '') + (sources.length >= 6 ? '<div class="additional-source"><button class="text-button" data-open-source>Add another research site</button></div>' : '');
 }
@@ -304,7 +319,7 @@ async function refreshAll() {
     $('lastSync').textContent = 'Retrying connection…';
   } finally { state.refreshing = false; }
 }
-function openSource(slot, existing = null, preset = null) {
+function openSource(slot, existing = null) {
   state.editingId = existing?.id || null;
   $('sourceForm').reset();
   $('formMessage').textContent = '';
@@ -314,13 +329,6 @@ function openSource(slot, existing = null, preset = null) {
   $('sourceSlotLabel').textContent = existing ? 'RESEARCH SITE / SETTINGS' : (slot ? 'RESEARCH SITE ' + slot + ' / SETUP' : 'SET UP A RESEARCH SITE');
   $('sourceDialogTitle').textContent = existing ? 'Edit research site settings.' : (slot ? 'Set up research site ' + slot + '.' : 'Add a research site.');
 
-  const oshaHosts = new Set(['www.osha.gov', 'apiprod.dol.gov', 'api.dol.gov']);
-  let existingHost = '';
-  try { existingHost = existing ? new URL(existing.start_url).hostname.toLowerCase() : ''; } catch {}
-  const isOsha = preset === 'osha' || oshaHosts.has(existingHost);
-  $('dolApiKeyField').hidden = !isOsha;
-  $('dolApiKey').value = '';
-
   if (existing) {
     const fields = {sourceName:'name', sourceUrl:'start_url', maxPages:'max_pages', maxDepth:'max_depth', concurrency:'concurrency', delayMs:'delay_ms', renderMode:'render_mode', intervalMinutes:'interval_minutes'};
     Object.entries(fields).forEach(([id, key]) => { $(id).value = existing[key]; });
@@ -328,45 +336,57 @@ function openSource(slot, existing = null, preset = null) {
     $('respectRobots').value = String(Boolean(existing.respect_robots));
   }
 
-  if (!existing && preset === 'osha') {
-    $('sourceName').value = 'OSHA / DOL Enforcement API';
-    $('sourceUrl').value = 'https://apiprod.dol.gov/v4/get/OSHA/inspection/json';
-    $('renderMode').value = 'http';
-    $('concurrency').value = '4';
-    $('delayMs').value = '150';
-    $('maxDepth').value = '4';
-    $('respectRobots').value = 'false';
-    $('sourceDialog').querySelector('.modal-intro').textContent = 'OSHA collection uses the Department of Labor Open Data REST API and searches only contractors already loaded in the master bidder database.';
-    $('sourceDialog').querySelector('.setup-note').textContent = 'Import the master bidder CSV first. OSHA uses contractor/related-company names plus address, city, state, and ZIP only to identify the correct business. It can propose changes only to OSHA, OSHA Severe Violations, and Years; the other bidder fields remain untouched.';
-  }
-
-  if (isOsha) {
-    $('dolApiKeyStatus').textContent = 'Checking whether a DOL API key is already saved locally…';
-    api('/api/integrations/dol').then(status => {
-      $('dolApiKeyStatus').textContent = status.configured
-        ? 'A DOL API key is already saved locally. Paste a new one only if you want to replace it.'
-        : 'A free DOL Open Data API key is required before OSHA collection. Register at dataportal.dol.gov/registration, then paste it here.';
-    }).catch(() => {
-      $('dolApiKeyStatus').textContent = 'DOL API key status could not be checked. You can paste the key here to save it locally.';
-    });
-  }
-
   $('sourceDialog').querySelector('.advanced').open = Boolean(existing);
   $('sourceDialog').showModal();
   $('sourceName').focus();
 }
+
+async function openDolKeyDialog() {
+  $('dolKeyForm').reset();
+  $('dolKeyMessage').textContent = '';
+  $('dolApiKeyStatus').textContent = 'Checking current DOL API key status…';
+  $('dolKeyDialog').showModal();
+  try {
+    const status = await api('/api/integrations/dol');
+    $('dolApiKeyStatus').textContent = status.configured
+      ? 'A DOL API key is already saved locally. Enter a new key only if you want to replace it; it will be tested before replacement.'
+      : 'No DOL API key is saved yet. Paste the free key below; the app will test it before saving.';
+  } catch (error) {
+    $('dolApiKeyStatus').textContent = 'Could not check the current key status.';
+    $('dolKeyMessage').textContent = error.message;
+  }
+  $('dolApiKey').focus();
+}
+
+async function saveDolApiKey(event) {
+  event.preventDefault();
+  const button = $('saveDolKey');
+  const key = $('dolApiKey').value.trim();
+  if (!key) return;
+  button.disabled = true;
+  $('dolKeyMessage').textContent = 'Testing key with the DOL Open Data API…';
+  try {
+    const result = await api('/api/integrations/dol', {method:'POST', body:JSON.stringify({api_key:key})});
+    if (!result.validated) throw new Error('DOL API key could not be validated.');
+    $('dolKeyDialog').close();
+    $('dolKeyForm').reset();
+    notify('DOL API key tested and saved locally. OSHA collection is ready.');
+    state.sourceSignature = '';
+    await refreshAll();
+  } catch (error) {
+    $('dolKeyMessage').textContent = error.message;
+    localEvent('ERROR', 'DOL API key test failed: ' + error.message);
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function addSource(event) {
   event.preventDefault();
   const button = $('saveSource');
   button.disabled = true;
   $('formMessage').textContent = state.editingId ? 'Saving collection settings…' : 'Checking this website…';
   try {
-    if (!$('dolApiKeyField').hidden) {
-      const dolKey = $('dolApiKey').value.trim();
-      if (dolKey) {
-        await api('/api/integrations/dol', {method:'POST', body:JSON.stringify({api_key:dolKey})});
-      }
-    }
     const body = {name: $('sourceName').value.trim(), start_url: $('sourceUrl').value.trim(), auto_scan: $('autoScan').value === 'true', interval_minutes: +$('intervalMinutes').value, max_pages: +$('maxPages').value, max_depth: +$('maxDepth').value, concurrency: +$('concurrency').value, delay_ms: +$('delayMs').value, render_mode: $('renderMode').value, respect_robots: $('respectRobots').value === 'true'};
     if (state.editingId) delete body.start_url;
     await api(state.editingId ? '/api/sources/' + state.editingId : '/api/sources', {method:state.editingId ? 'PATCH' : 'POST', body: JSON.stringify(body)});
@@ -450,7 +470,8 @@ async function captureSnapshot() {
 document.addEventListener('click', event => {
   const button = event.target.closest('button');
   if (!button) return;
-  if (button.hasAttribute('data-open-source')) openSource(button.dataset.openSource, null, button.dataset.preset || null);
+  if (button.hasAttribute('data-open-source')) openSource(button.dataset.openSource, null);
+  if (button.hasAttribute('data-dol-key')) openDolKeyDialog();
   if (button.dataset.record) viewRecord(+button.dataset.record);
   if (button.dataset.edit) openSource(null, state.sources.find(s => s.id === +button.dataset.edit));
   if (button.dataset.close) $(button.dataset.close).close();
@@ -472,6 +493,7 @@ document.addEventListener('click', event => {
   }
 });
 $('sourceForm').addEventListener('submit', addSource);
+$('dolKeyForm').addEventListener('submit', saveDolApiKey);
 $('confirmDelete').addEventListener('click', removeSource);
 $('refreshSources').addEventListener('click', refreshAll);
 $('helpButton').addEventListener('click', () => $('helpDialog').showModal());
