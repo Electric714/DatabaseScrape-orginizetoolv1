@@ -24,7 +24,7 @@
     <div class="local-badge"><span class="status-dot"></span> Local paralegal database</div>
     <p>Collected records are saved on this computer and remain searchable after a restart.</p>
     <button class="help-link" id="helpButton">How to use this tool <span aria-hidden="true">↗</span></button>
-    <div class="version">DATABASE TOOL <span id="appVersion">0.5.0</span></div>
+    <div class="version">DATABASE TOOL <span id="appVersion">0.6.0</span></div>
   </div>
 </aside>
 <main id="workspace">
@@ -95,7 +95,7 @@
         </div>
       </section>
       <section class="surface sources-panel" id="sourceSection" aria-labelledby="sourcesTitle">
-        <div class="section-heading"><div><div class="section-kicker">COLLECT / SIX RESEARCH SITES</div><h2 id="sourcesTitle">Your research sites <span id="sourceCount">0 / 6</span></h2><p id="siteSetupNote">OSHA/DOL and SAM.gov Federal Debarment are built in. Add their API keys once, then collect against the master bidder list.</p></div><div class="source-heading-actions"><button class="button primary small" id="oshaApiKeyButton" type="button">Set OSHA API key</button><button class="button primary small" id="samApiKeyButton" type="button">Set SAM test API key</button><button class="button subtle small" id="updateSites" disabled>Update configured sites</button></div></div>
+        <div class="section-heading"><div><div class="section-kicker">COLLECT / SIX RESEARCH SITES</div><h2 id="sourcesTitle">Your research sites <span id="sourceCount">0 / 6</span></h2><p id="siteSetupNote">OSHA/DOL, SAM.gov Federal Debarment, and BBB complaints are built in. API-backed sources use their saved keys; BBB searches only the companies in the master bidder list.</p></div><div class="source-heading-actions"><button class="button primary small" id="oshaApiKeyButton" type="button">Set OSHA API key</button><button class="button primary small" id="samApiKeyButton" type="button">Set SAM test API key</button><button class="button subtle small" id="updateSites" disabled>Update configured sites</button></div></div>
         <div id="sources"><div class="loading-state">Loading your research sites…</div></div>
         <div class="section-footer"><span>Collected records are saved to the local database.</span><button class="text-button" id="refreshSources">↻ Refresh status</button></div>
       </section>
