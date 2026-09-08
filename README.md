@@ -88,8 +88,32 @@ SAM is authoritative only for the **federal positive component** of `state_feder
 
 The Alpha endpoint is for testing. GSA documents separate Alpha access/account steps and rate limits; production promotion should happen only after the adapter has been validated with the law firm's examples.
 
+## BBB Business Profiles / Complaints — Source 3
+
+BBB is a built-in targeted parser. It does not perform a broad crawl of BBB.org and it does not use BBB data to populate unrelated bidder fields.
+
+For every approved master bidder, the adapter searches only the current `contractor_name` and any `related_companies`, using the master city/state/ZIP as location context. Candidate BBB profiles are matched conservatively by normalized business identity plus location evidence. This is specifically designed to avoid same-name false matches such as businesses with similar names in different cities.
+
+The collection path is:
+
+`master bidder → targeted BBB company/location lookup → plausible profile candidates → exact profile identity check → matched /complaints page → aggregate complaint evidence`
+
+BBB is authoritative for exactly one master field:
+
+- `better_business_bureau_complaints`
+
+The field semantics are:
+
+- `Y` — at least one exact company/location BBB profile reports one or more complaints in BBB's rolling three-year complaint summary.
+- `N` — an exact matched BBB profile reports zero complaints in the three-year summary, or a complete targeted search found no exact/plausible BBB profile attributable to that bidder.
+- blank — similar profiles require manual identity review, a matched profile's complaint summary could not be parsed reliably, or collection was incomplete.
+
+The evidence record retains the matched BBB profile URL/name/address, BBB's three-year complaint count, complaints closed in the last 12 months, and available complaint date/type/status metadata. Consumer complaint narratives are deliberately **not retained** because the bidder database only needs complaint presence plus enough provenance to review the finding.
+
+The parser has multiple layout fallbacks: ordinary server-rendered profile links, embedded JSON search payloads, JSON-LD profile identity data, semantic text/address parsing, and flexible complaint-summary wording. It follows at most three explicit search-result pages and uses one request at a time with a built-in delay. A 401/403/429 or explicit access challenge stops the source rather than attempting to defeat the site's controls.
+
 ## Query-focused source integrations
-Four website positions are still **pending**. Source 1 is the OSHA / DOL REST API integration and Source 2 is the SAM.gov Federal Debarment Alpha/test REST integration.
+Three website positions are still **pending**. Source 1 is OSHA/DOL, Source 2 is SAM.gov Federal Debarment, and Source 3 is the BBB complaint parser.
 
 The master database, comparison/review workflow, exports, crawl engine, and generic fallback extractor are in place. What is **not finished yet** is the site-specific query logic. Once the actual sites are supplied, each adapter must be tested against real examples and should define: the contractor/company query inputs; search-form or public endpoint behavior; result matching and identity rules; pagination/detail-page navigation; which bidder fields that site is authoritative for; and exactly what constitutes a positive, negative, unknown, or historical finding.
 
@@ -112,7 +136,7 @@ If setup fails, run **2 - REPAIR Setup.cmd**, then start again. Repair preserves
 
 ## Your workspace
 - **Master bidder database:** upload the firm's existing CSV, search the approved 30-column database, and export the current master as CSV, Excel, or JSON.
-- **Research websites:** six visible source positions, including built-in OSHA/DOL and SAM.gov Federal Debarment API sources, with remaining positions reserved for source-specific adapters.
+- **Research websites:** six visible source positions, including built-in OSHA/DOL, SAM.gov Federal Debarment, and BBB complaint sources, with remaining positions reserved for source-specific adapters.
 - **Collection:** run targeted source lookups, retain raw source evidence, and follow progress/errors.
 - **Comparison review:** compare source findings against the approved master, see old values in red and newly found values in green, then approve or dismiss each proposed change.
 - **Activity console:** follow progress, filter warnings/errors, search, pause, and jump to the latest event.
