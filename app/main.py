@@ -3,6 +3,7 @@ import csv
 import io
 import json
 import logging
+import httpx
 import hashlib
 from urllib.parse import urlsplit
 from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
@@ -23,10 +24,11 @@ from . import activity
 from . import bidder_master as bidder_db
 from .config import BASE_DIR, dol_api_key_configured, save_dol_api_key
 from .crawler import CrawlEngine, canonicalize_url
-from .security import validate_public_url
+from .security import PublicTransport, validate_public_url
 from .runtime import single_instance
 from .models import OshaStatus, ResearchField, ScanOptions, SourceCreate, SourceUpdate
 from .bidder_schema import BIDDER_COLUMNS, bidder_row, parse_bidder_csv
+from .osha_adapter import DOL_INSPECTION_ENDPOINT
 
 TASKS: dict[int, asyncio.Task] = {}
 SCHEDULER_TASK: asyncio.Task | None = None
@@ -35,6 +37,76 @@ SCAN_LOCK = asyncio.Lock()
 
 class DolApiKeyPayload(BaseModel):
     api_key: str = Field(min_length=10, max_length=512)
+
+
+OSHA_SOURCE_NAME = "OSHA / DOL Enforcement API"
+OSHA_SOURCE_HOSTS = {"www.osha.gov", "apiprod.dol.gov", "api.dol.gov"}
+
+
+def _is_osha_source(source: dict) -> bool:
+    try:
+        return (urlsplit(str(source.get("start_url") or "")).hostname or "").lower() in OSHA_SOURCE_HOSTS
+    except ValueError:
+        return False
+
+
+async def ensure_builtin_osha_source() -> dict:
+    sources = await db.list_sources()
+    existing = next((source for source in sources if _is_osha_source(source)), None)
+    if existing:
+        # Old OSHA HTML-source rows are retained so their evidence/history is not lost.
+        # CrawlEngine internally migrates them to the canonical DOL API endpoint.
+        desired = {
+            "name": OSHA_SOURCE_NAME,
+            "render_mode": "http",
+            "respect_robots": False,
+            "max_depth": 4,
+            "concurrency": 4,
+            "delay_ms": 150,
+        }
+        changed = {
+            key: value for key, value in desired.items()
+            if existing.get(key) != value and not (
+                isinstance(value, bool) and bool(existing.get(key)) == value
+            )
+        }
+        if changed:
+            return await db.update_source(existing["id"], changed) or existing
+        return existing
+    return await db.create_source({
+        "name": OSHA_SOURCE_NAME,
+        "start_url": DOL_INSPECTION_ENDPOINT,
+        "auto_scan": False,
+        "interval_minutes": 60,
+        "max_pages": 5000,
+        "max_depth": 4,
+        "concurrency": 4,
+        "delay_ms": 150,
+        "render_mode": "http",
+        "respect_robots": False,
+    })
+
+
+async def validate_dol_api_key(api_key: str) -> None:
+    # Validate without placing the credential in a URL, source row, or activity log.
+    test_url = DOL_INSPECTION_ENDPOINT + "?limit=1&fields=activity_nr"
+    try:
+        async with httpx.AsyncClient(
+            transport=PublicTransport(),
+            trust_env=False,
+            follow_redirects=False,
+            timeout=20.0,
+        ) as client:
+            response = await client.get(
+                test_url,
+                headers={"X-API-KEY": api_key, "Accept": "application/json"},
+            )
+    except (httpx.TimeoutException, httpx.NetworkError) as exc:
+        raise ValueError("Could not reach the DOL Open Data API to test this key") from exc
+    if response.status_code in {401, 403}:
+        raise ValueError("DOL rejected this API key")
+    if response.status_code < 200 or response.status_code >= 300:
+        raise ValueError(f"DOL API key test failed with HTTP {response.status_code}")
 
 
 async def launch_scan(source_id: int, force_full: bool = False) -> dict:
@@ -97,6 +169,7 @@ async def lifespan(_app: FastAPI):
     global SCHEDULER_TASK
     with single_instance():
         await db.init_db()
+        await ensure_builtin_osha_source()
         activity.install()
         activity.emit("INFO", "Paralegal Database Tool started. Ready to maintain the master bidder database and collect public-record evidence.", version=activity.APP_VERSION)
         await db.mark_interrupted_jobs()
@@ -181,8 +254,12 @@ async def get_stats():
 
 @app.get("/api/integrations/dol")
 async def dol_integration_status():
+    source = await ensure_builtin_osha_source()
     return {
         "configured": dol_api_key_configured(),
+        "source_id": source["id"],
+        "source_name": OSHA_SOURCE_NAME,
+        "endpoint": DOL_INSPECTION_ENDPOINT,
         "registration_url": "https://dataportal.dol.gov/registration",
     }
 
@@ -190,22 +267,28 @@ async def dol_integration_status():
 @app.post("/api/integrations/dol")
 async def configure_dol_integration(payload: DolApiKeyPayload):
     try:
+        await validate_dol_api_key(payload.api_key)
         save_dol_api_key(payload.api_key)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    activity.emit("INFO", "DOL Open Data API key configured")
-    return {"configured": True}
+    source = await ensure_builtin_osha_source()
+    activity.emit("INFO", "DOL Open Data API key tested and saved", source_id=source["id"])
+    return {"configured": True, "validated": True, "source_id": source["id"]}
 
 
 @app.get("/api/sources")
 async def get_sources():
-    return await db.list_sources()
+    osha = await ensure_builtin_osha_source()
+    sources = await db.list_sources()
+    return sorted(sources, key=lambda source: (0 if source["id"] == osha["id"] else 1, source["id"]))
 
 
 @app.post("/api/sources", status_code=201)
 async def post_source(payload: SourceCreate):
     data = payload.model_dump(mode="json")
     data["start_url"] = canonicalize_url(str(payload.start_url))
+    if urlsplit(data["start_url"]).hostname in OSHA_SOURCE_HOSTS:
+        raise HTTPException(status_code=409, detail="OSHA is built in. Use the Set API key button on the OSHA card.")
     try:
         await validate_public_url(data["start_url"])
     except ValueError as exc:
@@ -222,6 +305,11 @@ async def post_source(payload: SourceCreate):
 
 @app.patch("/api/sources/{source_id}")
 async def patch_source(source_id: int, payload: SourceUpdate):
+    source = await db.get_source(source_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="Source not found")
+    if _is_osha_source(source):
+        raise HTTPException(status_code=409, detail="OSHA is a built-in source and cannot be edited here")
     result = await db.update_source(source_id, payload.model_dump(exclude_unset=True))
     if not result:
         raise HTTPException(status_code=404, detail="Source not found")
@@ -235,6 +323,11 @@ async def delete_source(source_id: int):
 
 
 async def _delete_source(source_id: int):
+    source = await db.get_source(source_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="Source not found")
+    if _is_osha_source(source):
+        raise HTTPException(status_code=409, detail="OSHA is built in and cannot be removed")
     running = await db.running_job_for_source(source_id)
     if running:
         raise HTTPException(status_code=409, detail="Stop/wait for the active crawl before deleting this source")
