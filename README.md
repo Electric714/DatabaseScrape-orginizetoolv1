@@ -36,7 +36,7 @@ The master table can be searched and exported in the exact 30-column CSV, Excel,
 
 ## OSHA / DOL REST API — Source 1
 
-The OSHA integration uses the U.S. Department of Labor Open Data REST API instead of scraping OSHA's HTML establishment-search pages.
+OSHA is a built-in integration. The application automatically creates and pins it to the U.S. Department of Labor Open Data REST API instead of asking the operator to configure an OSHA website.
 
 - API base: `https://apiprod.dol.gov/v4`
 - inspection dataset: `/get/OSHA/inspection/json`
@@ -44,7 +44,7 @@ The OSHA integration uses the U.S. Department of Labor Open Data REST API instea
 
 Before collection, import the firm's bidder CSV. The adapter builds targeted API queries only for each approved `contractor_name` and any `related_companies`. It uses `address_1`, `city`, `state`, and `zip` only to resolve identity when more than one exact normalized company name could match. Similar-but-nonexact names remain unresolved for human review rather than being silently treated as the contractor.
 
-The DOL Open Data API requires an API key for data requests. DOL describes registration as a free API account. The key can be pasted into the OSHA source setup, where it is stored only in `.runtime/dol_api_key.txt`, or supplied through the `DOL_API_KEY` environment variable. `.runtime/` and `.env` are ignored by Git. The application sends the key only in the `X-API-KEY` request header; it is never placed in a URL, source record, activity event, export, or API response.
+The DOL Open Data API requires an API key for data requests. DOL describes registration as a free API account. The built-in OSHA card has a **Set API key** button; the app tests the key against DOL before saving it to `.runtime/dol_api_key.txt`. The key can also be supplied through the `DOL_API_KEY` environment variable. `.runtime/` and `.env` are ignored by Git. The application sends the key only in the `X-API-KEY` request header; it is never placed in a URL, source record, activity event, export, or API response.
 
 OSHA is authoritative for only three fields in the firm's 30-column bidder database:
 
