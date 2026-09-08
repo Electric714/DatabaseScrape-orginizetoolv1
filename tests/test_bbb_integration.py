@@ -289,6 +289,43 @@ def test_completed_search_with_no_profile_is_negative_but_partial_run_is_unknown
     assert adapter.finalize_records(complete=False) == []
 
 
+def test_unrecognized_200_search_page_fails_closed_instead_of_false_negative():
+    adapter = BbbComplaintsAdapter()
+    search_url = adapter.seed_urls([bidder_tuple_to_row(EXAMPLE_BIDDERS[3])])[0]
+
+    import pytest
+    with pytest.raises(ValueError, match="layout was not recognized"):
+        adapter.links(
+            "<html><body><main><div id='new-search-app'>Loading complete</div></main></body></html>",
+            search_url,
+        )
+
+
+def test_wrong_city_candidate_keeps_paginating_until_exact_location_is_found():
+    adapter = BbbComplaintsAdapter()
+    search_url = adapter.seed_urls([a_lamp()])[0]
+    page_one = """
+    <html><body>
+      <article><a href="/us/il/northbrook/profile/concrete-contractors/a-lamp-concrete-contractors-0654-90006663">A Lamp Concrete Contractors</a>
+      <p>2900 Old Willow Rd, Northbrook, IL 60062</p></article>
+      <a aria-label="Next page" href="/search?find_country=USA&find_text=A+LAMP+CONCRETE+CONTRACTORS+INC&find_loc=Schaumburg%2C+IL+60193&page=2">Next</a>
+    </body></html>
+    """
+    first_links = adapter.links(page_one, search_url)
+    assert any("northbrook" in url for url in first_links)
+    page_two_url = next(url for url in first_links if urlsplit(url).path == "/search")
+    assert parse_qs(urlsplit(page_two_url).query)["page"] == ["2"]
+
+    page_two = """
+    <html><body>
+      <article><a href="/us/il/schaumburg/profile/paving-contractors/a-lamp-concrete-contractors-0654-28001535">A. Lamp Concrete Contractors</a>
+      <p>1900 Wright Blvd, Schaumburg, IL 60193-4587</p></article>
+    </body></html>
+    """
+    second_links = adapter.links(page_two, page_two_url)
+    assert any("schaumburg" in url for url in second_links)
+
+
 async def test_bbb_full_crawl_proposes_only_bbb_complaint_field(database):
     baseline = a_lamp()
     await bidder_db.import_rows("Bidder Database-Example(2).csv", [baseline], [])
