@@ -4,6 +4,7 @@ from urllib.parse import urlsplit
 from .extractor import discover_links, extract_records
 from .osha_adapter import OshaEstablishmentAdapter
 from .sam_adapter import SamExclusionsAdapter
+from .bbb_adapter import BbbComplaintsAdapter
 
 
 class SourceAdapter(Protocol):
@@ -35,6 +36,8 @@ ADAPTERS: dict[str, type[GenericAdapter]] = {
     "api.dol.gov": OshaEstablishmentAdapter,
     "api-alpha.sam.gov": SamExclusionsAdapter,
     "api.sam.gov": SamExclusionsAdapter,
+    "www.bbb.org": BbbComplaintsAdapter,
+    "bbb.org": BbbComplaintsAdapter,
 }
 
 
