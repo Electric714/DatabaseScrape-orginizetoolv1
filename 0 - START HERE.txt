@@ -22,7 +22,7 @@ WINDOWS: OPEN THIS FIRST
 
 DATABASE WORKFLOW
 Upload the firm's existing bidder CSV to create the approved master database.
-Set up the six research websites when their names and URLs are available.
+OSHA is built in; set up the remaining five research websites when their names and URLs are available.
 Collect source evidence, then compare it against the approved master database.
 Review highlighted proposed changes and approve only the updates that belong.
 Search or export the current 30-column bidder database at any time.
@@ -33,8 +33,9 @@ OSHA collection uses the Department of Labor Open Data API. DOL requires an
 API key for data requests, but the API account is free. Register at:
 https://dataportal.dol.gov/registration
 
-Paste the key into the OSHA source setup. It is stored only in the local
-.runtime folder and is not added to GitHub, bidder exports, or activity logs.
+Click Set API key on the built-in OSHA card, paste the key, then choose
+Test & save API key. The app verifies it with DOL before storing it only in the
+local .runtime folder; it is not added to GitHub, bidder exports, or activity logs.
 OSHA can propose changes only to the OSHA, OSHA Severe Violations, and Years
 columns. The other bidder columns are left for their appropriate research sites.
 
