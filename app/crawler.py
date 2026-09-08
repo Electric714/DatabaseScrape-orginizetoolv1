@@ -242,10 +242,16 @@ class CrawlEngine:
         self.transport = transport  # Test dependency injection; never exposed by API.
         self.renderer = BrowserRenderer(self)
         self.adapter = adapter_for_url(self.start_url)
-        if getattr(self.adapter, "ignore_robots", False):
-            # Source-specific proof-of-concept adapters may explicitly opt out
-            # of the generic robots policy gate. The adapter still constrains
-            # hostname/path/request scope.
+        canonical_start = getattr(self.adapter, "canonical_start_url", None)
+        if canonical_start:
+            self.start_url = canonicalize_url(canonical_start)
+            self.start_host = urlsplit(self.start_url).hostname
+        if getattr(self.adapter, "api_source", False):
+            # API endpoints are not website crawls, so robots.txt does not apply.
+            self.respect_robots = False
+        elif getattr(self.adapter, "ignore_robots", False):
+            # Legacy source-specific adapters may explicitly opt out of the
+            # generic robots policy gate while retaining strict URL boundaries.
             self.respect_robots = False
 
     async def run(self):
@@ -256,9 +262,14 @@ class CrawlEngine:
                 transport=self.transport or PublicTransport(), trust_env=False, follow_redirects=False,
                 timeout=DEFAULT_TIMEOUT_SECONDS, headers={"User-Agent": DEFAULT_USER_AGENT},
             ) as client:
-                if getattr(self.adapter, "ignore_robots", False):
+                if getattr(self.adapter, "api_source", False):
                     activity.emit(
-                        "WARNING", "robots.txt policy check skipped for source-specific proof of concept",
+                        "INFO", "Using authenticated public API source; robots.txt is not applicable",
+                        source_id=self.source_id, job_id=self.job_id, url=self.start_url,
+                    )
+                elif getattr(self.adapter, "ignore_robots", False):
+                    activity.emit(
+                        "WARNING", "robots.txt policy check skipped for source-specific adapter",
                         source_id=self.source_id, job_id=self.job_id, url=self.start_url,
                     )
                 else:
@@ -266,7 +277,7 @@ class CrawlEngine:
                 if getattr(self.adapter, "query_mode", False):
                     master_rows = await bidder_master_db.all_rows()
                     if not master_rows:
-                        raise ValueError("Import the master bidder CSV before running the OSHA contractor search")
+                        raise ValueError("Import the master bidder CSV before running the targeted contractor search")
                     frontier = list(self.adapter.seed_urls(master_rows))
                     if not frontier:
                         raise ValueError("The master bidder database contains no contractor names to search")
@@ -351,7 +362,7 @@ class CrawlEngine:
             await db.increment_job(self.job_id, errors=1)
             await db.upsert_page(self.source_id, url, last_error=str(exc)[:1000])
             if getattr(self.adapter, "fail_fast_access_errors", False) and (
-                "HTTP 403" in str(exc) or "access challenge" in str(exc).lower()
+                "HTTP 401" in str(exc) or "HTTP 403" in str(exc) or "access challenge" in str(exc).lower()
             ):
                 raise
             return []
@@ -433,6 +444,9 @@ class CrawlEngine:
             return await self.renderer.fetch_direct(url)
 
         headers = {}
+        request_headers = getattr(self.adapter, "request_headers", None)
+        if request_headers:
+            headers.update(request_headers(url))
         if cached and cached.get("fetch_mode") == self.render_mode and not self.force_full and not cached.get("rendered") and self.render_mode != "browser" and not getattr(self.adapter, "always_parse", False):
             if cached.get("etag"):
                 headers["If-None-Match"] = cached["etag"]
@@ -514,6 +528,9 @@ class CrawlEngine:
                     raise ValueError("Redirect without Location")
                 url = urljoin(url, location)
                 headers = {}
+                request_headers = getattr(self.adapter, "request_headers", None)
+                if request_headers:
+                    headers.update(request_headers(url))
                 continue
             if result.status < 300 and result.status != 204:
                 kind = result.headers.get("content-type", "").lower()
