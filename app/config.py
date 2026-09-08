@@ -7,6 +7,7 @@ EXPORT_DIR = BASE_DIR / "exports"
 DB_PATH = DATA_DIR / "crawler.db"
 RUNTIME_DIR = BASE_DIR / ".runtime"
 DOL_API_KEY_PATH = RUNTIME_DIR / "dol_api_key.txt"
+SAM_API_KEY_PATH = RUNTIME_DIR / "sam_api_key.txt"
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 EXPORT_DIR.mkdir(parents=True, exist_ok=True)
@@ -50,5 +51,32 @@ def save_dol_api_key(value: str) -> None:
     DOL_API_KEY_PATH.write_text(key, encoding="utf-8")
     try:
         DOL_API_KEY_PATH.chmod(0o600)
+    except OSError:
+        pass
+
+
+def get_sam_api_key() -> str:
+    """Return the local SAM.gov API key without logging or exposing it."""
+    env_key = os.environ.get("SAM_API_KEY", "").strip()
+    if env_key:
+        return env_key
+    try:
+        return SAM_API_KEY_PATH.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def sam_api_key_configured() -> bool:
+    return bool(get_sam_api_key())
+
+
+def save_sam_api_key(value: str) -> None:
+    key = (value or "").strip()
+    if len(key) < 10 or len(key) > 512 or any(ord(ch) < 32 for ch in key):
+        raise ValueError("Enter the API key exactly as issued by SAM.gov")
+    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    SAM_API_KEY_PATH.write_text(key, encoding="utf-8")
+    try:
+        SAM_API_KEY_PATH.chmod(0o600)
     except OSError:
         pass
