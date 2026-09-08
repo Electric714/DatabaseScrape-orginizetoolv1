@@ -336,7 +336,10 @@ def test_api_smoke_and_exports(database, monkeypatch):
         result = client.post("/api/sources", json={"name": "Fixture", "start_url": "https://fixture.test/", "delay_ms": 0, "render_mode": "http"})
         assert result.status_code == 201, result.text
         sid = result.json()["id"]
-        assert len(client.get("/api/sources").json()) == 1
+        sources = client.get("/api/sources").json()
+        assert len(sources) == 2
+        assert any(source["name"] == main.OSHA_SOURCE_NAME for source in sources)
+        assert any(source["id"] == sid for source in sources)
         assert client.post("/api/sources", json={"name": "Duplicate", "start_url": "https://fixture.test/"}).status_code == 409
         for version in (1, 2):
             site.version = version
