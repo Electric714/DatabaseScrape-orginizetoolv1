@@ -55,6 +55,8 @@ def test_live_gui_smoke(database, monkeypatch):
                 expect(page.locator("#uploadCsvButton")).to_be_visible()
                 expect(page.locator("#uploadCsvButton")).to_have_text("Upload master CSV")
                 assert page.locator("#sourceSection").count() == 1
+                expect(page.locator("#oshaApiKeyButton")).to_be_visible()
+                expect(page.locator("#oshaApiKeyButton")).to_have_text("Set OSHA API key")
                 expect(page.get_by_role("heading", name="OSHA / DOL Enforcement API")).to_be_visible()
                 expect(page.get_by_role("button", name="Set API key")).to_be_visible()
                 expect(page.get_by_role("button", name="Collect OSHA", exact=True)).to_be_disabled()
