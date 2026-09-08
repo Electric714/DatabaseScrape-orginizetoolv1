@@ -31,6 +31,7 @@ def test_live_gui_smoke(database, monkeypatch):
         return ["93.184.216.34"]
     monkeypatch.setattr(main, "CrawlEngine", FixtureEngine)
     monkeypatch.setattr(main, "validate_public_url", public)
+    monkeypatch.setattr(main, "dol_api_key_configured", lambda: False)
     listener = socket.socket()
     listener.bind(("127.0.0.1", 0))
     port = listener.getsockname()[1]
@@ -54,6 +55,13 @@ def test_live_gui_smoke(database, monkeypatch):
                 expect(page.locator("#uploadCsvButton")).to_be_visible()
                 expect(page.locator("#uploadCsvButton")).to_have_text("Upload master CSV")
                 assert page.locator("#sourceSection").count() == 1
+                expect(page.get_by_role("heading", name="OSHA / DOL Enforcement API")).to_be_visible()
+                expect(page.get_by_role("button", name="Set API key")).to_be_visible()
+                expect(page.get_by_role("button", name="Collect OSHA")).to_be_disabled()
+                page.get_by_role("button", name="Set API key").click()
+                expect(page.locator("#dolKeyDialog")).to_be_visible()
+                expect(page.get_by_role("button", name="Test & save API key")).to_be_visible()
+                page.get_by_role("button", name="Cancel").last.click()
                 table_layout = page.evaluate("""() => {
                     const wrap = document.querySelector('.bidder-table-wrap');
                     const table = document.querySelector('.bidder-table');
