@@ -66,8 +66,30 @@ Inspection IDs, establishment/location fields, dates, citation IDs, violation ty
 
 Because this is a documented REST API integration, the application does not navigate OSHA pages, launch a special browser session, or apply website `robots.txt` logic for these API requests.
 
+## SAM.gov Federal Debarment / Exclusions API — Source 2
+
+SAM.gov Federal Debarment is also a built-in integration. For the current proof-of-concept the application is pinned to the official **v4 Alpha/test Exclusions API** documented by GSA:
+
+- Alpha/test endpoint: `https://api-alpha.sam.gov/entity-information/v4/exclusions`
+- Production endpoint reserved for promotion later: `https://api.sam.gov/entity-information/v4/exclusions`
+- API documentation: `https://open.gsa.gov/api/exclusions-api/`
+
+The adapter submits targeted `classification=Firm`, `recordStatus=Active`, and `exclusionName` queries for each approved contractor and related company. It performs conservative normalized company-name matching and uses the bidder address/state/city/ZIP only for disambiguation when necessary.
+
+SAM requires an API key as the `api_key` query parameter. The built-in SAM card has a **Set SAM test API key** control; the app validates the key against the official Alpha endpoint before saving it to `.runtime/sam_api_key.txt`. `SAM_API_KEY` may also be supplied as an environment variable.
+
+Because SAM requires the credential in the query string, the crawler uses a credential-injection hook: stored source URLs, page-cache URLs, record evidence, activity events, diagnostics, and bidder exports contain the credential-free logical URL. The API key is added only to the outbound network request.
+
+SAM is authoritative only for the **federal positive component** of `state_federal_debarment`:
+
+- an exact active federal exclusion match may propose `state_federal_debarment = Y`;
+- a clean SAM search does **not** propose `N`, because the same combined field can still be positive due to a state debarment source;
+- similar names remain evidence for manual identity review and do not update the master automatically.
+
+The Alpha endpoint is for testing. GSA documents separate Alpha access/account steps and rate limits; production promotion should happen only after the adapter has been validated with the law firm's examples.
+
 ## Query-focused source integrations
-Five website names and URLs are still **pending**. Source 1 is now the OSHA / DOL REST API integration; the remaining five positions are ready for the other sources.
+Four website positions are still **pending**. Source 1 is the OSHA / DOL REST API integration and Source 2 is the SAM.gov Federal Debarment Alpha/test REST integration.
 
 The master database, comparison/review workflow, exports, crawl engine, and generic fallback extractor are in place. What is **not finished yet** is the site-specific query logic. Once the actual sites are supplied, each adapter must be tested against real examples and should define: the contractor/company query inputs; search-form or public endpoint behavior; result matching and identity rules; pagination/detail-page navigation; which bidder fields that site is authoritative for; and exactly what constitutes a positive, negative, unknown, or historical finding.
 
@@ -90,7 +112,7 @@ If setup fails, run **2 - REPAIR Setup.cmd**, then start again. Repair preserves
 
 ## Your workspace
 - **Master bidder database:** upload the firm's existing CSV, search the approved 30-column database, and export the current master as CSV, Excel, or JSON.
-- **Research websites:** six visible source positions ready for source-specific contractor-query adapters. Edit collection settings without removing saved records.
+- **Research websites:** six visible source positions, including built-in OSHA/DOL and SAM.gov Federal Debarment API sources, with remaining positions reserved for source-specific adapters.
 - **Collection:** run targeted source lookups, retain raw source evidence, and follow progress/errors.
 - **Comparison review:** compare source findings against the approved master, see old values in red and newly found values in green, then approve or dismiss each proposed change.
 - **Activity console:** follow progress, filter warnings/errors, search, pause, and jump to the latest event.
