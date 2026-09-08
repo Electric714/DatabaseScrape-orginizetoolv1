@@ -22,13 +22,20 @@ from openpyxl.utils import get_column_letter
 from . import database as db
 from . import activity
 from . import bidder_master as bidder_db
-from .config import BASE_DIR, dol_api_key_configured, save_dol_api_key
+from .config import (
+    BASE_DIR,
+    dol_api_key_configured,
+    save_dol_api_key,
+    sam_api_key_configured,
+    save_sam_api_key,
+)
 from .crawler import CrawlEngine, canonicalize_url
 from .security import PublicTransport, validate_public_url
 from .runtime import single_instance
 from .models import OshaStatus, ResearchField, ScanOptions, SourceCreate, SourceUpdate
 from .bidder_schema import BIDDER_COLUMNS, bidder_row, parse_bidder_csv
 from .osha_adapter import DOL_INSPECTION_ENDPOINT
+from .sam_adapter import SAM_EXCLUSIONS_ENDPOINT
 
 TASKS: dict[int, asyncio.Task] = {}
 SCHEDULER_TASK: asyncio.Task | None = None
@@ -39,8 +46,14 @@ class DolApiKeyPayload(BaseModel):
     api_key: str = Field(min_length=10, max_length=512)
 
 
+class SamApiKeyPayload(BaseModel):
+    api_key: str = Field(min_length=10, max_length=512)
+
+
 OSHA_SOURCE_NAME = "OSHA / DOL Enforcement API"
 OSHA_SOURCE_HOSTS = {"www.osha.gov", "apiprod.dol.gov", "api.dol.gov"}
+SAM_SOURCE_NAME = "SAM.gov Federal Debarment / Exclusions (Alpha Test API)"
+SAM_SOURCE_HOSTS = {"sam.gov", "www.sam.gov", "api.sam.gov", "api-alpha.sam.gov"}
 
 
 def _is_osha_source(source: dict) -> bool:
@@ -87,6 +100,41 @@ async def ensure_builtin_osha_source() -> dict:
     })
 
 
+def _is_sam_source(source: dict) -> bool:
+    try:
+        return (urlsplit(str(source.get("start_url") or "")).hostname or "").lower() in SAM_SOURCE_HOSTS
+    except ValueError:
+        return False
+
+
+async def ensure_builtin_sam_source() -> dict:
+    sources = await db.list_sources()
+    existing = next((source for source in sources if _is_sam_source(source)), None)
+    desired = {
+        "name": SAM_SOURCE_NAME,
+        "start_url": SAM_EXCLUSIONS_ENDPOINT,
+        "auto_scan": False,
+        "interval_minutes": 1440,
+        "max_pages": 5000,
+        "max_depth": 4,
+        "concurrency": 1,
+        "delay_ms": 500,
+        "render_mode": "http",
+        "respect_robots": False,
+    }
+    if existing:
+        changed = {
+            key: value for key, value in desired.items()
+            if existing.get(key) != value and not (
+                isinstance(value, bool) and bool(existing.get(key)) == value
+            )
+        }
+        if changed:
+            return await db.update_source(existing["id"], changed) or existing
+        return existing
+    return await db.create_source(desired)
+
+
 async def validate_dol_api_key(api_key: str) -> None:
     # Validate without placing the credential in a URL, source row, or activity log.
     test_url = DOL_INSPECTION_ENDPOINT + "?limit=1&fields=activity_nr"
@@ -107,6 +155,34 @@ async def validate_dol_api_key(api_key: str) -> None:
         raise ValueError("DOL rejected this API key")
     if response.status_code < 200 or response.status_code >= 300:
         raise ValueError(f"DOL API key test failed with HTTP {response.status_code}")
+
+
+async def validate_sam_api_key(api_key: str) -> None:
+    try:
+        async with httpx.AsyncClient(
+            transport=PublicTransport(),
+            trust_env=False,
+            follow_redirects=False,
+            timeout=20.0,
+        ) as client:
+            response = await client.get(
+                SAM_EXCLUSIONS_ENDPOINT,
+                params={
+                    "api_key": api_key,
+                    "classification": "Firm",
+                    "page": 0,
+                    "size": 1,
+                },
+                headers={"Accept": "application/json"},
+            )
+    except (httpx.TimeoutException, httpx.NetworkError) as exc:
+        raise ValueError("Could not reach the SAM.gov Alpha Exclusions API to test this key") from exc
+    if response.status_code in {401, 403}:
+        raise ValueError("SAM.gov Alpha rejected this API key")
+    if response.status_code == 429:
+        raise ValueError("SAM.gov Alpha rate limit reached; try the key again after the limit resets")
+    if response.status_code < 200 or response.status_code >= 300:
+        raise ValueError(f"SAM.gov Alpha API key test failed with HTTP {response.status_code}")
 
 
 async def launch_scan(source_id: int, force_full: bool = False) -> dict:
@@ -170,6 +246,7 @@ async def lifespan(_app: FastAPI):
     with single_instance():
         await db.init_db()
         await ensure_builtin_osha_source()
+        await ensure_builtin_sam_source()
         activity.install()
         activity.emit("INFO", "Paralegal Database Tool started. Ready to maintain the master bidder database and collect public-record evidence.", version=activity.APP_VERSION)
         await db.mark_interrupted_jobs()
@@ -276,19 +353,50 @@ async def configure_dol_integration(payload: DolApiKeyPayload):
     return {"configured": True, "validated": True, "source_id": source["id"]}
 
 
+@app.get("/api/integrations/sam")
+async def sam_integration_status():
+    source = await ensure_builtin_sam_source()
+    return {
+        "configured": sam_api_key_configured(),
+        "source_id": source["id"],
+        "source_name": SAM_SOURCE_NAME,
+        "endpoint": SAM_EXCLUSIONS_ENDPOINT,
+        "environment": "alpha",
+        "documentation_url": "https://open.gsa.gov/api/exclusions-api/",
+        "api_key_url": "https://sam.gov/profile/details",
+    }
+
+
+@app.post("/api/integrations/sam")
+async def configure_sam_integration(payload: SamApiKeyPayload):
+    try:
+        await validate_sam_api_key(payload.api_key)
+        save_sam_api_key(payload.api_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    source = await ensure_builtin_sam_source()
+    activity.emit("INFO", "SAM.gov Alpha Exclusions API key tested and saved", source_id=source["id"])
+    return {"configured": True, "validated": True, "source_id": source["id"], "environment": "alpha"}
+
+
 @app.get("/api/sources")
 async def get_sources():
     osha = await ensure_builtin_osha_source()
+    sam = await ensure_builtin_sam_source()
     sources = await db.list_sources()
-    return sorted(sources, key=lambda source: (0 if source["id"] == osha["id"] else 1, source["id"]))
+    order = {osha["id"]: 0, sam["id"]: 1}
+    return sorted(sources, key=lambda source: (order.get(source["id"], 2), source["id"]))
 
 
 @app.post("/api/sources", status_code=201)
 async def post_source(payload: SourceCreate):
     data = payload.model_dump(mode="json")
     data["start_url"] = canonicalize_url(str(payload.start_url))
-    if urlsplit(data["start_url"]).hostname in OSHA_SOURCE_HOSTS:
+    hostname = (urlsplit(data["start_url"]).hostname or "").lower()
+    if hostname in OSHA_SOURCE_HOSTS:
         raise HTTPException(status_code=409, detail="OSHA is built in. Use the Set API key button on the OSHA card.")
+    if hostname in SAM_SOURCE_HOSTS:
+        raise HTTPException(status_code=409, detail="SAM.gov Federal Debarment is built in. Use the SAM API key button.")
     try:
         await validate_public_url(data["start_url"])
     except ValueError as exc:
@@ -310,6 +418,8 @@ async def patch_source(source_id: int, payload: SourceUpdate):
         raise HTTPException(status_code=404, detail="Source not found")
     if _is_osha_source(source):
         raise HTTPException(status_code=409, detail="OSHA is a built-in source and cannot be edited here")
+    if _is_sam_source(source):
+        raise HTTPException(status_code=409, detail="SAM.gov Federal Debarment is a built-in source and cannot be edited here")
     result = await db.update_source(source_id, payload.model_dump(exclude_unset=True))
     if not result:
         raise HTTPException(status_code=404, detail="Source not found")
@@ -328,6 +438,8 @@ async def _delete_source(source_id: int):
         raise HTTPException(status_code=404, detail="Source not found")
     if _is_osha_source(source):
         raise HTTPException(status_code=409, detail="OSHA is built in and cannot be removed")
+    if _is_sam_source(source):
+        raise HTTPException(status_code=409, detail="SAM.gov Federal Debarment is built in and cannot be removed")
     running = await db.running_job_for_source(source_id)
     if running:
         raise HTTPException(status_code=409, detail="Stop/wait for the active crawl before deleting this source")

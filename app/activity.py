@@ -11,7 +11,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from . import database as db
 
-APP_VERSION = "0.4.1"
+APP_VERSION = "0.5.0"
 URL = re.compile(r"https?://[^\s<>\"']+")
 SECRET = re.compile(r"(?i)(authorization|cookie|password|token|api[_-]?key|secret)(\s*[:=]\s*)([^\s,;]+)")
 
