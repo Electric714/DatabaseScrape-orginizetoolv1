@@ -37,6 +37,7 @@ def main():
         return 0
     import uvicorn
     from app import database as db
+    from app.activity import APP_VERSION
     workspace = hashlib.sha256(str(db.DB_PATH.resolve()).encode()).hexdigest()[:16]
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     sock = None
@@ -51,10 +52,16 @@ def main():
             try:
                 with opener.open(f"http://127.0.0.1:{port}/api/health", timeout=1) as response:
                     health = json.load(response)
-                if health.get("workspace") == workspace and health.get("application") == "public-data-monitor":
+                if health.get("workspace") == workspace and health.get("application") in {"paralegal-database-tool", "public-data-monitor"}:
+                    running_version = str(health.get("version") or "unknown")
+                    if running_version != APP_VERSION:
+                        raise RuntimeError(
+                            f"An older copy of this workspace is still running (version {running_version}). "
+                            f"Close its launcher window, then start this version ({APP_VERSION}) again."
+                        )
                     print(f"Your workspace is already running: http://127.0.0.1:{port}")
                     if not args.no_browser:
-                        webbrowser.open(f"http://127.0.0.1:{port}")
+                        webbrowser.open(f"http://127.0.0.1:{port}/?v={APP_VERSION}")
                     return 0
             except Exception:
                 pass
@@ -67,7 +74,7 @@ def main():
             if server.started:
                 print(f"\nOpen {address}\nKeep this window open. Press Ctrl+C here to stop safely.\n")
                 if not args.no_browser:
-                    webbrowser.open(address)
+                    webbrowser.open(address + f"/?v={APP_VERSION}")
                 return
             if server.should_exit:
                 return
