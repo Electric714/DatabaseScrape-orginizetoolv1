@@ -343,9 +343,10 @@ class CrawlEngine:
             await db.update_job(self.job_id, status="cancelled", finished_at=db.utcnow(), message="Crawl cancelled")
             raise
         except Exception as exc:
-            activity.emit("ERROR", "Scan failed", source_id=self.source_id, job_id=self.job_id, error=str(exc))
+            safe_error = activity.redact(str(exc))
+            activity.emit("ERROR", "Scan failed", source_id=self.source_id, job_id=self.job_id, error=safe_error)
             await db.increment_job(self.job_id, errors=1)
-            await db.update_job(self.job_id, status="failed", finished_at=db.utcnow(), message=str(exc)[:1000])
+            await db.update_job(self.job_id, status="failed", finished_at=db.utcnow(), message=safe_error[:1000])
             raise
         finally:
             await self.renderer.close()
@@ -358,11 +359,12 @@ class CrawlEngine:
             activity.emit("INFO", "Page processed", source_id=self.source_id, job_id=self.job_id, url=url, links=len(links))
             return links
         except Exception as exc:
-            activity.emit("ERROR", "Page could not be processed", source_id=self.source_id, job_id=self.job_id, url=url, error=str(exc))
+            safe_error = activity.redact(str(exc))
+            activity.emit("ERROR", "Page could not be processed", source_id=self.source_id, job_id=self.job_id, url=url, error=safe_error)
             await db.increment_job(self.job_id, errors=1)
-            await db.upsert_page(self.source_id, url, last_error=str(exc)[:1000])
+            await db.upsert_page(self.source_id, url, last_error=safe_error[:1000])
             if getattr(self.adapter, "fail_fast_access_errors", False) and (
-                "HTTP 401" in str(exc) or "HTTP 403" in str(exc) or "access challenge" in str(exc).lower()
+                "HTTP 401" in safe_error or "HTTP 403" in safe_error or "access challenge" in safe_error.lower()
             ):
                 raise
             return []
@@ -491,7 +493,12 @@ class CrawlEngine:
             for attempt in range(4):
                 await self._throttle()
                 try:
-                    async with asyncio.timeout(60), client.stream("GET", url, headers=headers) as response:
+                    request_url = url
+                    request_builder = getattr(self.adapter, "request_url", None)
+                    if request_builder:
+                        request_url = request_builder(url)
+                        self._check_request(request_url, robots)
+                    async with asyncio.timeout(60), client.stream("GET", request_url, headers=headers) as response:
                         body = bytearray()
                         async for chunk in response.aiter_bytes(chunk_size=65536):
                             body.extend(chunk)
@@ -505,7 +512,9 @@ class CrawlEngine:
                                 text = body.decode(response.encoding or "utf-8", errors="replace")
                         except LookupError:
                             text = body.decode("utf-8", errors="replace")
-                        result = FetchResult(str(response.url), response.status_code, text, dict(response.headers), body=bytes(body))
+                        # Keep credential-bearing request URLs out of caches, logs, and records.
+                        visible_url = url if request_builder else str(response.url)
+                        result = FetchResult(visible_url, response.status_code, text, dict(response.headers), body=bytes(body))
                     if result.status not in {429, 500, 502, 503, 504} or attempt == 3:
                         break
                     wait = min(2 ** attempt, 20)
