@@ -56,15 +56,23 @@ async def ensure_builtin_osha_source() -> dict:
     if existing:
         # Old OSHA HTML-source rows are retained so their evidence/history is not lost.
         # CrawlEngine internally migrates them to the canonical DOL API endpoint.
-        updated = await db.update_source(existing["id"], {
+        desired = {
             "name": OSHA_SOURCE_NAME,
             "render_mode": "http",
             "respect_robots": False,
             "max_depth": 4,
             "concurrency": 4,
             "delay_ms": 150,
-        })
-        return updated or existing
+        }
+        changed = {
+            key: value for key, value in desired.items()
+            if existing.get(key) != value and not (
+                isinstance(value, bool) and bool(existing.get(key)) == value
+            )
+        }
+        if changed:
+            return await db.update_source(existing["id"], changed) or existing
+        return existing
     return await db.create_source({
         "name": OSHA_SOURCE_NAME,
         "start_url": DOL_INSPECTION_ENDPOINT,
@@ -97,7 +105,7 @@ async def validate_dol_api_key(api_key: str) -> None:
         raise ValueError("Could not reach the DOL Open Data API to test this key") from exc
     if response.status_code in {401, 403}:
         raise ValueError("DOL rejected this API key")
-    if response.status_code >= 400:
+    if response.status_code < 200 or response.status_code >= 300:
         raise ValueError(f"DOL API key test failed with HTTP {response.status_code}")
 
 
