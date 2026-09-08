@@ -169,3 +169,5 @@ main{margin-left:214px;padding:0 40px;max-width:1920px}.topbar{height:91px;displ
   .master-upload-button{width:100%}
   .records-panel .bidder-table{min-width:5000px}
 }
+
+.source-heading-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end}.source-heading-actions .button{white-space:nowrap}@media(max-width:720px){.source-heading-actions{width:100%;justify-content:flex-start}}
