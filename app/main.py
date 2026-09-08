@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone, timedelta
 
 from fastapi import FastAPI, HTTPException, Query, Request
+from pydantic import BaseModel, Field
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from openpyxl import Workbook
@@ -20,7 +21,7 @@ from openpyxl.utils import get_column_letter
 from . import database as db
 from . import activity
 from . import bidder_master as bidder_db
-from .config import BASE_DIR
+from .config import BASE_DIR, dol_api_key_configured, save_dol_api_key
 from .crawler import CrawlEngine, canonicalize_url
 from .security import validate_public_url
 from .runtime import single_instance
@@ -30,6 +31,10 @@ from .bidder_schema import BIDDER_COLUMNS, bidder_row, parse_bidder_csv
 TASKS: dict[int, asyncio.Task] = {}
 SCHEDULER_TASK: asyncio.Task | None = None
 SCAN_LOCK = asyncio.Lock()
+
+
+class DolApiKeyPayload(BaseModel):
+    api_key: str = Field(min_length=10, max_length=512)
 
 
 async def launch_scan(source_id: int, force_full: bool = False) -> dict:
@@ -172,6 +177,24 @@ async def activity_export():
 @app.get("/api/stats")
 async def get_stats():
     return await db.stats()
+
+
+@app.get("/api/integrations/dol")
+async def dol_integration_status():
+    return {
+        "configured": dol_api_key_configured(),
+        "registration_url": "https://dataportal.dol.gov/registration",
+    }
+
+
+@app.post("/api/integrations/dol")
+async def configure_dol_integration(payload: DolApiKeyPayload):
+    try:
+        save_dol_api_key(payload.api_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    activity.emit("INFO", "DOL Open Data API key configured")
+    return {"configured": True}
 
 
 @app.get("/api/sources")
