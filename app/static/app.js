@@ -65,11 +65,12 @@ async function loadSources() {
     const running = isCollecting(s);
     return '<article class="source-row"><div class="source-avatar" aria-hidden="true">' + (index + 1) + '</div><div class="source-info"><h3>' + esc(s.name) + '</h3><a class="source-url" href="' + esc(safeUrl(s.start_url)) + '" target="_blank" rel="noreferrer">' + esc(s.start_url) + '</a><div class="source-details"><span class="tag ' + esc(s.last_status || '') + '">' + esc(s.last_status || 'Ready to collect') + '</span><span>' + (s.auto_scan ? 'Every ' + s.interval_minutes + ' min' : 'Manual collection') + '</span><span>· ' + esc(humanDate(s.last_scan_at)) + '</span></div></div><div class="source-controls"><button class="scan-button" data-scan="' + s.id + '"' + (running ? ' disabled' : '') + '>' + (running ? 'Collecting…' : 'Collect records') + '</button><button class="settings-button" data-edit="' + s.id + '">Edit settings</button><button class="icon-button" data-full="' + s.id + '" aria-label="Recollect all pages from ' + esc(s.name) + '" title="Recollect all pages, ignoring cached pages"' + (running ? ' disabled' : '') + '>↻</button><button class="icon-button" data-delete="' + s.id + '" aria-label="Delete ' + esc(s.name) + '" title="Remove research site"' + (running ? ' disabled' : '') + '>×</button></div></article>';
   }).join('');
-  const hasOsha = sources.some(s => { try { return new URL(s.start_url).hostname.toLowerCase() === 'www.osha.gov'; } catch { return false; } });
+  const oshaHosts = new Set(['www.osha.gov', 'apiprod.dol.gov', 'api.dol.gov']);
+  const hasOsha = sources.some(s => { try { return oshaHosts.has(new URL(s.start_url).hostname.toLowerCase()); } catch { return false; } });
   const pending = Array.from({length: Math.max(0, 6 - sources.length)}, (_, index) => {
     const number = sources.length + index + 1;
     const oshaPreset = !hasOsha && index === 0;
-    return '<article class="pending-site"><span class="pending-number" aria-hidden="true">' + number + '</span><div><h3>' + (oshaPreset ? 'OSHA Establishment Search' : 'Research site ' + number) + '</h3><p>' + (oshaPreset ? 'Proof of concept · queries imported master contractors only' : 'Name and website address pending') + '</p></div><button class="button subtle small" data-open-source="' + number + '"' + (oshaPreset ? ' data-preset="osha"' : '') + '>' + (oshaPreset ? 'Set up OSHA' : 'Set up site ' + number) + '</button></article>';
+    return '<article class="pending-site"><span class="pending-number" aria-hidden="true">' + number + '</span><div><h3>' + (oshaPreset ? 'OSHA / DOL Enforcement API' : 'Research site ' + number) + '</h3><p>' + (oshaPreset ? 'REST API · queries imported master contractors only' : 'Name and website address pending') + '</p></div><button class="button subtle small" data-open-source="' + number + '"' + (oshaPreset ? ' data-preset="osha"' : '') + '>' + (oshaPreset ? 'Set up OSHA' : 'Set up site ' + number) + '</button></article>';
   }).join('');
   $('sources').innerHTML = (configured ? '<div class="source-list">' + configured + '</div>' : '') + (pending ? '<div class="pending-sites">' + pending + '</div>' : '') + (sources.length >= 6 ? '<div class="additional-source"><button class="text-button" data-open-source>Add another research site</button></div>' : '');
 }
@@ -309,26 +310,47 @@ function openSource(slot, existing = null, preset = null) {
   $('formMessage').textContent = '';
   $('sourceUrl').readOnly = Boolean(existing);
   $('saveSource').textContent = existing ? 'Save site settings' : 'Save research site';
-  $('sourceDialog').querySelector('.modal-intro').textContent = existing ? 'Update the name, schedule, or collection limits for this site. Its saved research records are preserved.' : 'Connect one of your public-record research websites. Records collected from it are saved locally.';
+  $('sourceDialog').querySelector('.modal-intro').textContent = existing ? 'Update the name, schedule, or collection limits for this site. Its saved research records are preserved.' : 'Connect one of your public-record research websites or APIs. Records collected from it are saved locally.';
   $('sourceSlotLabel').textContent = existing ? 'RESEARCH SITE / SETTINGS' : (slot ? 'RESEARCH SITE ' + slot + ' / SETUP' : 'SET UP A RESEARCH SITE');
   $('sourceDialogTitle').textContent = existing ? 'Edit research site settings.' : (slot ? 'Set up research site ' + slot + '.' : 'Add a research site.');
+
+  const oshaHosts = new Set(['www.osha.gov', 'apiprod.dol.gov', 'api.dol.gov']);
+  let existingHost = '';
+  try { existingHost = existing ? new URL(existing.start_url).hostname.toLowerCase() : ''; } catch {}
+  const isOsha = preset === 'osha' || oshaHosts.has(existingHost);
+  $('dolApiKeyField').hidden = !isOsha;
+  $('dolApiKey').value = '';
+
   if (existing) {
     const fields = {sourceName:'name', sourceUrl:'start_url', maxPages:'max_pages', maxDepth:'max_depth', concurrency:'concurrency', delayMs:'delay_ms', renderMode:'render_mode', intervalMinutes:'interval_minutes'};
     Object.entries(fields).forEach(([id, key]) => { $(id).value = existing[key]; });
     $('autoScan').value = String(Boolean(existing.auto_scan));
     $('respectRobots').value = String(Boolean(existing.respect_robots));
   }
+
   if (!existing && preset === 'osha') {
-    $('sourceName').value = 'OSHA Establishment Search';
-    $('sourceUrl').value = 'https://www.osha.gov/ords/imis/establishment.html';
-    $('renderMode').value = 'browser';
-    $('concurrency').value = '2';
-    $('delayMs').value = '500';
-    $('maxDepth').value = '12';
+    $('sourceName').value = 'OSHA / DOL Enforcement API';
+    $('sourceUrl').value = 'https://apiprod.dol.gov/v4/get/OSHA/inspection/json';
+    $('renderMode').value = 'http';
+    $('concurrency').value = '4';
+    $('delayMs').value = '150';
+    $('maxDepth').value = '4';
     $('respectRobots').value = 'false';
-    $('sourceDialog').querySelector('.modal-intro').textContent = 'OSHA proof of concept. This source searches only contractors and related-company names already loaded in the master bidder database.';
-    $('sourceDialog').querySelector('.setup-note').textContent = 'Import the master bidder CSV first. OSHA uses a restricted Chromium browser session for its public search pages, runs ten-year windows from 1972 to today, and retains source evidence for review before any master value changes.';
+    $('sourceDialog').querySelector('.modal-intro').textContent = 'OSHA collection uses the Department of Labor Open Data REST API and searches only contractors already loaded in the master bidder database.';
+    $('sourceDialog').querySelector('.setup-note').textContent = 'Import the master bidder CSV first. OSHA uses contractor/related-company names plus address, city, state, and ZIP only to identify the correct business. It can propose changes only to OSHA, OSHA Severe Violations, and Years; the other bidder fields remain untouched.';
   }
+
+  if (isOsha) {
+    $('dolApiKeyStatus').textContent = 'Checking whether a DOL API key is already saved locally…';
+    api('/api/integrations/dol').then(status => {
+      $('dolApiKeyStatus').textContent = status.configured
+        ? 'A DOL API key is already saved locally. Paste a new one only if you want to replace it.'
+        : 'A free DOL Open Data API key is required before OSHA collection. Register at dataportal.dol.gov/registration, then paste it here.';
+    }).catch(() => {
+      $('dolApiKeyStatus').textContent = 'DOL API key status could not be checked. You can paste the key here to save it locally.';
+    });
+  }
+
   $('sourceDialog').querySelector('.advanced').open = Boolean(existing);
   $('sourceDialog').showModal();
   $('sourceName').focus();
@@ -339,6 +361,12 @@ async function addSource(event) {
   button.disabled = true;
   $('formMessage').textContent = state.editingId ? 'Saving collection settings…' : 'Checking this website…';
   try {
+    if (!$('dolApiKeyField').hidden) {
+      const dolKey = $('dolApiKey').value.trim();
+      if (dolKey) {
+        await api('/api/integrations/dol', {method:'POST', body:JSON.stringify({api_key:dolKey})});
+      }
+    }
     const body = {name: $('sourceName').value.trim(), start_url: $('sourceUrl').value.trim(), auto_scan: $('autoScan').value === 'true', interval_minutes: +$('intervalMinutes').value, max_pages: +$('maxPages').value, max_depth: +$('maxDepth').value, concurrency: +$('concurrency').value, delay_ms: +$('delayMs').value, render_mode: $('renderMode').value, respect_robots: $('respectRobots').value === 'true'};
     if (state.editingId) delete body.start_url;
     await api(state.editingId ? '/api/sources/' + state.editingId : '/api/sources', {method:state.editingId ? 'PATCH' : 'POST', body: JSON.stringify(body)});
