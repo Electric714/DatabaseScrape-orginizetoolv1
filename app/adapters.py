@@ -27,7 +27,11 @@ class GenericAdapter:
 # Register exact hostnames here. Adapters return a stable, namespaced external_id
 # and can narrow query/pagination boundaries, but cannot widen the network policy.
 ADAPTERS: dict[str, type[GenericAdapter]] = {
+    # Existing OSHA HTML sources are kept as aliases so old local databases migrate
+    # transparently to the canonical DOL API endpoint at scan time.
     "www.osha.gov": OshaEstablishmentAdapter,
+    "apiprod.dol.gov": OshaEstablishmentAdapter,
+    "api.dol.gov": OshaEstablishmentAdapter,
 }
 
 
