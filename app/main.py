@@ -36,6 +36,7 @@ from .models import OshaStatus, ResearchField, ScanOptions, SourceCreate, Source
 from .bidder_schema import BIDDER_COLUMNS, bidder_row, parse_bidder_csv
 from .osha_adapter import DOL_INSPECTION_ENDPOINT
 from .sam_adapter import SAM_EXCLUSIONS_ENDPOINT
+from .bbb_adapter import BBB_SEARCH_ENDPOINT
 
 TASKS: dict[int, asyncio.Task] = {}
 SCHEDULER_TASK: asyncio.Task | None = None
@@ -54,6 +55,8 @@ OSHA_SOURCE_NAME = "OSHA / DOL Enforcement API"
 OSHA_SOURCE_HOSTS = {"www.osha.gov", "apiprod.dol.gov", "api.dol.gov"}
 SAM_SOURCE_NAME = "SAM.gov Federal Debarment / Exclusions (Alpha Test API)"
 SAM_SOURCE_HOSTS = {"sam.gov", "www.sam.gov", "api.sam.gov", "api-alpha.sam.gov"}
+BBB_SOURCE_NAME = "BBB Business Profiles / Complaints"
+BBB_SOURCE_HOSTS = {"bbb.org", "www.bbb.org"}
 
 
 def _is_osha_source(source: dict) -> bool:
@@ -120,6 +123,41 @@ async def ensure_builtin_sam_source() -> dict:
         "concurrency": 1,
         "delay_ms": 500,
         "render_mode": "http",
+        "respect_robots": False,
+    }
+    if existing:
+        changed = {
+            key: value for key, value in desired.items()
+            if existing.get(key) != value and not (
+                isinstance(value, bool) and bool(existing.get(key)) == value
+            )
+        }
+        if changed:
+            return await db.update_source(existing["id"], changed) or existing
+        return existing
+    return await db.create_source(desired)
+
+
+def _is_bbb_source(source: dict) -> bool:
+    try:
+        return (urlsplit(str(source.get("start_url") or "")).hostname or "").lower() in BBB_SOURCE_HOSTS
+    except ValueError:
+        return False
+
+
+async def ensure_builtin_bbb_source() -> dict:
+    sources = await db.list_sources()
+    existing = next((source for source in sources if _is_bbb_source(source)), None)
+    desired = {
+        "name": BBB_SOURCE_NAME,
+        "start_url": BBB_SEARCH_ENDPOINT,
+        "auto_scan": False,
+        "interval_minutes": 1440,
+        "max_pages": 5000,
+        "max_depth": 2,
+        "concurrency": 1,
+        "delay_ms": 1500,
+        "render_mode": "auto",
         "respect_robots": False,
     }
     if existing:
@@ -247,6 +285,7 @@ async def lifespan(_app: FastAPI):
         await db.init_db()
         await ensure_builtin_osha_source()
         await ensure_builtin_sam_source()
+        await ensure_builtin_bbb_source()
         activity.install()
         activity.emit("INFO", "Paralegal Database Tool started. Ready to maintain the master bidder database and collect public-record evidence.", version=activity.APP_VERSION)
         await db.mark_interrupted_jobs()
@@ -383,9 +422,10 @@ async def configure_sam_integration(payload: SamApiKeyPayload):
 async def get_sources():
     osha = await ensure_builtin_osha_source()
     sam = await ensure_builtin_sam_source()
+    bbb = await ensure_builtin_bbb_source()
     sources = await db.list_sources()
-    order = {osha["id"]: 0, sam["id"]: 1}
-    return sorted(sources, key=lambda source: (order.get(source["id"], 2), source["id"]))
+    order = {osha["id"]: 0, sam["id"]: 1, bbb["id"]: 2}
+    return sorted(sources, key=lambda source: (order.get(source["id"], 3), source["id"]))
 
 
 @app.post("/api/sources", status_code=201)
@@ -397,6 +437,8 @@ async def post_source(payload: SourceCreate):
         raise HTTPException(status_code=409, detail="OSHA is built in. Use the Set API key button on the OSHA card.")
     if hostname in SAM_SOURCE_HOSTS:
         raise HTTPException(status_code=409, detail="SAM.gov Federal Debarment is built in. Use the SAM API key button.")
+    if hostname in BBB_SOURCE_HOSTS:
+        raise HTTPException(status_code=409, detail="BBB is built in. Use the BBB source card.")
     try:
         await validate_public_url(data["start_url"])
     except ValueError as exc:
@@ -420,6 +462,8 @@ async def patch_source(source_id: int, payload: SourceUpdate):
         raise HTTPException(status_code=409, detail="OSHA is a built-in source and cannot be edited here")
     if _is_sam_source(source):
         raise HTTPException(status_code=409, detail="SAM.gov Federal Debarment is a built-in source and cannot be edited here")
+    if _is_bbb_source(source):
+        raise HTTPException(status_code=409, detail="BBB is a built-in source and cannot be edited here")
     result = await db.update_source(source_id, payload.model_dump(exclude_unset=True))
     if not result:
         raise HTTPException(status_code=404, detail="Source not found")
@@ -440,6 +484,8 @@ async def _delete_source(source_id: int):
         raise HTTPException(status_code=409, detail="OSHA is built in and cannot be removed")
     if _is_sam_source(source):
         raise HTTPException(status_code=409, detail="SAM.gov Federal Debarment is built in and cannot be removed")
+    if _is_bbb_source(source):
+        raise HTTPException(status_code=409, detail="BBB is built in and cannot be removed")
     running = await db.running_job_for_source(source_id)
     if running:
         raise HTTPException(status_code=409, detail="Stop/wait for the active crawl before deleting this source")

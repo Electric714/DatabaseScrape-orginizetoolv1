@@ -6,6 +6,8 @@ const OSHA_HOSTS = new Set(['www.osha.gov', 'apiprod.dol.gov', 'api.dol.gov']);
 const OSHA_API_URL = 'https://apiprod.dol.gov/v4/get/OSHA/inspection/json';
 const SAM_HOSTS = new Set(['sam.gov', 'www.sam.gov', 'api.sam.gov', 'api-alpha.sam.gov']);
 const SAM_API_URL = 'https://api-alpha.sam.gov/entity-information/v4/exclusions';
+const BBB_HOSTS = new Set(['bbb.org', 'www.bbb.org']);
+const BBB_URL = 'https://www.bbb.org/search';
 const PAGE_SIZE = 50;
 let toastTimer;
 
@@ -51,6 +53,9 @@ function isOshaSource(source) {
 function isSamSource(source) {
   try { return SAM_HOSTS.has(new URL(source.start_url).hostname.toLowerCase()); } catch { return false; }
 }
+function isBbbSource(source) {
+  try { return BBB_HOSTS.has(new URL(source.start_url).hostname.toLowerCase()); } catch { return false; }
+}
 function sourceReadyForCollection(source) {
   return !isCollecting(source)
     && (!isOshaSource(source) || Boolean(state.dolStatus?.configured))
@@ -79,7 +84,7 @@ async function loadSources() {
   $('navSources').textContent = sources.length < 6 ? sources.length + '/6' : sources.length;
   $('sitesHint').textContent = sources.length < 6 ? (6 - sources.length) + ' site' + (sources.length === 5 ? '' : 's') + ' awaiting setup' : 'Ready for collection and source review';
   $('siteSetupNote').textContent = sources.length < 6
-    ? 'OSHA/DOL and SAM.gov Federal Debarment are built in. Remaining sources can be added as their adapters are finalized.'
+    ? 'OSHA/DOL, SAM.gov Federal Debarment, and BBB complaints are built in. Remaining sources can be added as their adapters are finalized.'
     : 'Collect from each source, then review its saved evidence.';
   updateCollectionButton();
 
@@ -95,6 +100,7 @@ async function loadSources() {
     const running = isCollecting(s);
     const isOsha = isOshaSource(s);
     const isSam = isSamSource(s);
+    const isBbb = isBbbSource(s);
     if (isOsha) {
       const keyState = dolStatus.configured ? 'API key configured' : 'API key required';
       return '<article class="source-row"><div class="source-avatar" aria-hidden="true">' + (index + 1) + '</div><div class="source-info"><h3>OSHA / DOL Enforcement API</h3><a class="source-url" href="' + OSHA_API_URL + '" target="_blank" rel="noreferrer">' + OSHA_API_URL + '</a><div class="source-details"><span class="tag ' + (dolStatus.configured ? 'completed' : 'partial') + '">' + keyState + '</span><span>Built-in REST source</span><span>· ' + esc(humanDate(s.last_scan_at)) + '</span></div></div><div class="source-controls"><button class="settings-button" data-dol-key>Set API key</button><button class="scan-button" data-scan="' + s.id + '"' + (running || !dolStatus.configured ? ' disabled' : '') + '>' + (running ? 'Collecting…' : 'Collect OSHA') + '</button><button class="icon-button" data-full="' + s.id + '" aria-label="Recollect OSHA API records" title="Recollect OSHA API records, ignoring cached responses"' + (running || !dolStatus.configured ? ' disabled' : '') + '>↻</button></div></article>';
@@ -102,6 +108,9 @@ async function loadSources() {
     if (isSam) {
       const keyState = samStatus.configured ? 'API key configured' : 'API key required';
       return '<article class="source-row"><div class="source-avatar" aria-hidden="true">' + (index + 1) + '</div><div class="source-info"><h3>SAM.gov Federal Debarment / Exclusions</h3><a class="source-url" href="' + SAM_API_URL + '" target="_blank" rel="noreferrer">' + SAM_API_URL + '</a><div class="source-details"><span class="tag ' + (samStatus.configured ? 'completed' : 'partial') + '">' + keyState + '</span><span>Built-in REST source · Alpha/test v4</span><span>· ' + esc(humanDate(s.last_scan_at)) + '</span></div></div><div class="source-controls"><button class="settings-button" data-sam-key>Set test API key</button><button class="scan-button" data-scan="' + s.id + '"' + (running || !samStatus.configured ? ' disabled' : '') + '>' + (running ? 'Collecting…' : 'Collect federal debarment') + '</button><button class="icon-button" data-full="' + s.id + '" aria-label="Recollect SAM federal debarment API records" title="Recollect SAM Alpha API records, ignoring cached responses"' + (running || !samStatus.configured ? ' disabled' : '') + '>↻</button></div></article>';
+    }
+    if (isBbb) {
+      return '<article class="source-row"><div class="source-avatar" aria-hidden="true">' + (index + 1) + '</div><div class="source-info"><h3>BBB Business Profiles / Complaints</h3><a class="source-url" href="' + BBB_URL + '" target="_blank" rel="noreferrer">' + BBB_URL + '</a><div class="source-details"><span class="tag completed">Built-in parser</span><span>Targeted company/location matching</span><span>· ' + esc(humanDate(s.last_scan_at)) + '</span></div></div><div class="source-controls"><button class="scan-button" data-scan="' + s.id + '"' + (running ? ' disabled' : '') + '>' + (running ? 'Collecting…' : 'Collect BBB complaints') + '</button><button class="icon-button" data-full="' + s.id + '" aria-label="Recollect BBB complaint records" title="Recollect BBB profiles and complaint summaries, ignoring cached responses"' + (running ? ' disabled' : '') + '>↻</button></div></article>';
     }
     return '<article class="source-row"><div class="source-avatar" aria-hidden="true">' + (index + 1) + '</div><div class="source-info"><h3>' + esc(s.name) + '</h3><a class="source-url" href="' + esc(safeUrl(s.start_url)) + '" target="_blank" rel="noreferrer">' + esc(s.start_url) + '</a><div class="source-details"><span class="tag ' + esc(s.last_status || '') + '">' + esc(s.last_status || 'Ready to collect') + '</span><span>' + (s.auto_scan ? 'Every ' + s.interval_minutes + ' min' : 'Manual collection') + '</span><span>· ' + esc(humanDate(s.last_scan_at)) + '</span></div></div><div class="source-controls"><button class="scan-button" data-scan="' + s.id + '"' + (running ? ' disabled' : '') + '>' + (running ? 'Collecting…' : 'Collect records') + '</button><button class="settings-button" data-edit="' + s.id + '">Edit settings</button><button class="icon-button" data-full="' + s.id + '" aria-label="Recollect all pages from ' + esc(s.name) + '" title="Recollect all pages, ignoring cached pages"' + (running ? ' disabled' : '') + '>↻</button><button class="icon-button" data-delete="' + s.id + '" aria-label="Delete ' + esc(s.name) + '" title="Remove research site"' + (running ? ' disabled' : '') + '>×</button></div></article>';
   }).join('');

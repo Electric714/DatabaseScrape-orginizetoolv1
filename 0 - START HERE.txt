@@ -22,7 +22,7 @@ WINDOWS: OPEN THIS FIRST
 
 DATABASE WORKFLOW
 Upload the firm's existing bidder CSV to create the approved master database.
-OSHA/DOL and SAM.gov Federal Debarment are built in; the remaining four research-site positions are reserved for the other adapters.
+OSHA/DOL, SAM.gov Federal Debarment, and BBB complaints are built in; the remaining three research-site positions are reserved for the other adapters.
 Collect source evidence, then compare it against the approved master database.
 Review highlighted proposed changes and approve only the updates that belong.
 Search or export the current 30-column bidder database at any time.
@@ -50,6 +50,17 @@ URLs, activity logs, GitHub, diagnostics, or bidder exports.
 
 An exact active federal exclusion can propose state_federal_debarment = Y.
 A clean SAM result does not write N because state debarment is checked separately.
+
+BBB COMPLAINTS
+BBB is built in and needs no API key. Click Collect BBB complaints after the
+master CSV is loaded. The parser searches only the bidder/related-company names
+from the master, uses city/state/ZIP to avoid same-name false matches, and writes
+only better_business_bureau_complaints.
+
+BBB complaint counts and profile identity are retained as evidence. Consumer
+complaint narratives are not stored. If BBB returns an access challenge or rate
+limit, the collector stops and leaves uncertain results blank rather than trying
+to work around the site.
 
 NEXT TIME
 Double-click the same START file. Completed setup is reused.

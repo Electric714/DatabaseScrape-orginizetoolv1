@@ -69,6 +69,8 @@ def test_live_gui_smoke(database, monkeypatch):
                 page.get_by_role("button", name="Cancel").last.click()
                 expect(page.get_by_role("heading", name="SAM.gov Federal Debarment / Exclusions")).to_be_visible()
                 expect(page.get_by_role("button", name="Collect federal debarment", exact=True)).to_be_disabled()
+                expect(page.get_by_role("heading", name="BBB Business Profiles / Complaints")).to_be_visible()
+                expect(page.get_by_role("button", name="Collect BBB complaints", exact=True)).to_be_enabled()
                 page.locator("#samApiKeyButton").click()
                 expect(page.locator("#samKeyDialog")).to_be_visible()
                 expect(page.locator("#saveSamKey")).to_be_visible()
