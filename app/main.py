@@ -287,7 +287,7 @@ async def get_sources():
 async def post_source(payload: SourceCreate):
     data = payload.model_dump(mode="json")
     data["start_url"] = canonicalize_url(str(payload.start_url))
-    if (urlsplit(data["start_url"]).hostname in OSHA_SOURCE_HOSTS:
+    if urlsplit(data["start_url"]).hostname in OSHA_SOURCE_HOSTS:
         raise HTTPException(status_code=409, detail="OSHA is built in. Use the Set API key button on the OSHA card.")
     try:
         await validate_public_url(data["start_url"])
