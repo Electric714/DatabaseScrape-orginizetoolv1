@@ -274,7 +274,10 @@ def _sync_list_sources() -> list[dict[str, Any]]:
 def _sync_update_source(source_id: int, data: dict[str, Any]) -> dict[str, Any] | None:
     if not data:
         return _sync_get_source(source_id)
-    allowed = {"name", "auto_scan", "interval_minutes", "max_pages", "max_depth", "concurrency", "delay_ms", "render_mode", "respect_robots"}
+    # start_url is accepted by the internal database helper so built-in source
+    # migrations can retarget a legacy row without deleting its evidence/history.
+    # The public PATCH API model does not expose start_url.
+    allowed = {"name", "start_url", "auto_scan", "interval_minutes", "max_pages", "max_depth", "concurrency", "delay_ms", "render_mode", "respect_robots"}
     values = {k: v for k, v in data.items() if k in allowed and v is not None}
     for key in ("auto_scan", "respect_robots"):
         if key in values:
