@@ -131,8 +131,9 @@
   <h2 id="sourceDialogTitle">Add a research site.</h2><p class="modal-intro">Connect one of your public-record research websites. Records collected from it are saved locally.</p>
   <form id="sourceForm">
     <label>Research site name<input id="sourceName" required maxlength="120" placeholder="Enter the actual website name" autocomplete="off"></label>
-    <label>Website address<input id="sourceUrl" type="url" required placeholder="https://…" autocomplete="url"><small>Use the public listing or directory page you want to collect.</small></label>
-    <p class="setup-note">Adding a site configures collection. Extraction coverage will need checking against each of the six actual websites; fields the site does not provide remain unknown.</p>
+    <label>Website address<input id="sourceUrl" type="url" required placeholder="https://…" autocomplete="url"><small>Use the public listing, API, or directory endpoint you want to collect.</small></label>
+    <label id="dolApiKeyField" hidden>DOL Open Data API key<input id="dolApiKey" type="password" maxlength="512" autocomplete="new-password" placeholder="Paste the free DOL API key"><small id="dolApiKeyStatus">Required only for OSHA/DOL API requests. Stored locally on this computer and never added to the project.</small></label>
+    <p class="setup-note">Adding a site configures collection. Extraction coverage will need checking against each actual source; fields the source does not provide remain unknown.</p>
     <details class="advanced"><summary>Collection settings <span>Optional</span></summary><div class="advanced-grid">
       <label>Page limit<input id="maxPages" type="number" min="1" max="250000" value="5000" required></label>
       <label>Link depth<input id="maxDepth" type="number" min="0" max="100" value="12" required></label>
