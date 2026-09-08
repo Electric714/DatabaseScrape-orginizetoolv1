@@ -117,7 +117,7 @@ def _is_complaints_url(url: str) -> bool:
 def _script_json(soup: BeautifulSoup):
     for script in soup.find_all("script"):
         kind = (script.get("type") or "").lower()
-        raw = script.string or script.get_text("", strip=True)
+        raw = (script.string or script.get_text("", strip=True) or "").strip()
         if not raw:
             continue
         if "ld+json" in kind:
