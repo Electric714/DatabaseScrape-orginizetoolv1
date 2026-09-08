@@ -28,6 +28,16 @@ Review highlighted proposed changes and approve only the updates that belong.
 Search or export the current 30-column bidder database at any time.
 Missing source data means unknown and does not erase an existing master value.
 
+OSHA / DOL API KEY
+OSHA collection uses the Department of Labor Open Data API. DOL requires an
+API key for data requests, but the API account is free. Register at:
+https://dataportal.dol.gov/registration
+
+Paste the key into the OSHA source setup. It is stored only in the local
+.runtime folder and is not added to GitHub, bidder exports, or activity logs.
+OSHA can propose changes only to the OSHA, OSHA Severe Violations, and Years
+columns. The other bidder columns are left for their appropriate research sites.
+
 NEXT TIME
 Double-click the same START file. Completed setup is reused.
 
