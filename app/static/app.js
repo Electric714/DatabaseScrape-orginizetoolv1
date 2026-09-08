@@ -1,9 +1,11 @@
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const safeUrl = value => { try { const u = new URL(value); return ['http:', 'https:'].includes(u.protocol) ? u.href : '#'; } catch { return '#'; } };
-const state = {sources: [], sourceSignature: '', jobsSignature: '', events: [], cursor: 0, paused: false, follow: true, level: 'all', offset: 0, total: 0, refreshing: false, online: null, deleteId: null, recordSequence: 0, detailSequence: 0, batchUpdating: false, editingId: null, bidderStatus: null, proposalSignature: '', dolStatus: null};
+const state = {sources: [], sourceSignature: '', jobsSignature: '', events: [], cursor: 0, paused: false, follow: true, level: 'all', offset: 0, total: 0, refreshing: false, online: null, deleteId: null, recordSequence: 0, detailSequence: 0, batchUpdating: false, editingId: null, bidderStatus: null, proposalSignature: '', dolStatus: null, samStatus: null};
 const OSHA_HOSTS = new Set(['www.osha.gov', 'apiprod.dol.gov', 'api.dol.gov']);
 const OSHA_API_URL = 'https://apiprod.dol.gov/v4/get/OSHA/inspection/json';
+const SAM_HOSTS = new Set(['sam.gov', 'www.sam.gov', 'api.sam.gov', 'api-alpha.sam.gov']);
+const SAM_API_URL = 'https://api-alpha.sam.gov/entity-information/v4/exclusions';
 const PAGE_SIZE = 50;
 let toastTimer;
 
@@ -46,8 +48,13 @@ function isCollecting(source) { return ['queued', 'running'].includes(source.las
 function isOshaSource(source) {
   try { return OSHA_HOSTS.has(new URL(source.start_url).hostname.toLowerCase()); } catch { return false; }
 }
+function isSamSource(source) {
+  try { return SAM_HOSTS.has(new URL(source.start_url).hostname.toLowerCase()); } catch { return false; }
+}
 function sourceReadyForCollection(source) {
-  return !isCollecting(source) && (!isOshaSource(source) || Boolean(state.dolStatus?.configured));
+  return !isCollecting(source)
+    && (!isOshaSource(source) || Boolean(state.dolStatus?.configured))
+    && (!isSamSource(source) || Boolean(state.samStatus?.configured));
 }
 function updateCollectionButton() {
   const available = state.sources.filter(sourceReadyForCollection).length;
@@ -56,23 +63,27 @@ function updateCollectionButton() {
   $('updateSites').title = available ? 'Collect updated records from ' + available + ' available research sites' : (state.sources.length ? 'All configured sites are already collecting' : 'Set up a research site first');
 }
 async function loadSources() {
-  const [sources, dolStatus] = await Promise.all([
+  const [sources, dolStatus, samStatus] = await Promise.all([
     api('/api/sources'),
-    api('/api/integrations/dol')
+    api('/api/integrations/dol'),
+    api('/api/integrations/sam')
   ]);
   state.sources = sources;
   state.dolStatus = dolStatus;
+  state.samStatus = samStatus;
   $('oshaApiKeyButton').textContent = dolStatus.configured ? 'Change OSHA API key' : 'Set OSHA API key';
   $('oshaApiKeyButton').title = dolStatus.configured ? 'Replace and validate the locally saved DOL API key' : 'Enter and validate the DOL API key required for OSHA collection';
+  $('samApiKeyButton').textContent = samStatus.configured ? 'Change SAM test API key' : 'Set SAM test API key';
+  $('samApiKeyButton').title = samStatus.configured ? 'Replace and validate the locally saved SAM.gov Alpha API key' : 'Enter and validate the SAM.gov Alpha/test API key required for federal debarment collection';
   $('sourceCount').textContent = sources.length < 6 ? sources.length + ' / 6' : sources.length + ' configured';
   $('navSources').textContent = sources.length < 6 ? sources.length + '/6' : sources.length;
   $('sitesHint').textContent = sources.length < 6 ? (6 - sources.length) + ' site' + (sources.length === 5 ? '' : 's') + ' awaiting setup' : 'Ready for collection and source review';
   $('siteSetupNote').textContent = sources.length < 6
-    ? 'OSHA is built in. The remaining research sites can be added as their names and addresses are finalized.'
+    ? 'OSHA/DOL and SAM.gov Federal Debarment are built in. Remaining sources can be added as their adapters are finalized.'
     : 'Collect from each source, then review its saved evidence.';
   updateCollectionButton();
 
-  const signature = JSON.stringify({sources, dolConfigured: dolStatus.configured});
+  const signature = JSON.stringify({sources, dolConfigured: dolStatus.configured, samConfigured: samStatus.configured});
   if (signature === state.sourceSignature) return;
   state.sourceSignature = signature;
 
@@ -83,9 +94,14 @@ async function loadSources() {
   const configured = sources.map((s, index) => {
     const running = isCollecting(s);
     const isOsha = isOshaSource(s);
+    const isSam = isSamSource(s);
     if (isOsha) {
       const keyState = dolStatus.configured ? 'API key configured' : 'API key required';
       return '<article class="source-row"><div class="source-avatar" aria-hidden="true">' + (index + 1) + '</div><div class="source-info"><h3>OSHA / DOL Enforcement API</h3><a class="source-url" href="' + OSHA_API_URL + '" target="_blank" rel="noreferrer">' + OSHA_API_URL + '</a><div class="source-details"><span class="tag ' + (dolStatus.configured ? 'completed' : 'partial') + '">' + keyState + '</span><span>Built-in REST source</span><span>· ' + esc(humanDate(s.last_scan_at)) + '</span></div></div><div class="source-controls"><button class="settings-button" data-dol-key>Set API key</button><button class="scan-button" data-scan="' + s.id + '"' + (running || !dolStatus.configured ? ' disabled' : '') + '>' + (running ? 'Collecting…' : 'Collect OSHA') + '</button><button class="icon-button" data-full="' + s.id + '" aria-label="Recollect OSHA API records" title="Recollect OSHA API records, ignoring cached responses"' + (running || !dolStatus.configured ? ' disabled' : '') + '>↻</button></div></article>';
+    }
+    if (isSam) {
+      const keyState = samStatus.configured ? 'API key configured' : 'API key required';
+      return '<article class="source-row"><div class="source-avatar" aria-hidden="true">' + (index + 1) + '</div><div class="source-info"><h3>SAM.gov Federal Debarment / Exclusions</h3><a class="source-url" href="' + SAM_API_URL + '" target="_blank" rel="noreferrer">' + SAM_API_URL + '</a><div class="source-details"><span class="tag ' + (samStatus.configured ? 'completed' : 'partial') + '">' + keyState + '</span><span>Built-in REST source · Alpha/test v4</span><span>· ' + esc(humanDate(s.last_scan_at)) + '</span></div></div><div class="source-controls"><button class="settings-button" data-sam-key>Set test API key</button><button class="scan-button" data-scan="' + s.id + '"' + (running || !samStatus.configured ? ' disabled' : '') + '>' + (running ? 'Collecting…' : 'Collect federal debarment') + '</button><button class="icon-button" data-full="' + s.id + '" aria-label="Recollect SAM federal debarment API records" title="Recollect SAM Alpha API records, ignoring cached responses"' + (running || !samStatus.configured ? ' disabled' : '') + '>↻</button></div></article>';
     }
     return '<article class="source-row"><div class="source-avatar" aria-hidden="true">' + (index + 1) + '</div><div class="source-info"><h3>' + esc(s.name) + '</h3><a class="source-url" href="' + esc(safeUrl(s.start_url)) + '" target="_blank" rel="noreferrer">' + esc(s.start_url) + '</a><div class="source-details"><span class="tag ' + esc(s.last_status || '') + '">' + esc(s.last_status || 'Ready to collect') + '</span><span>' + (s.auto_scan ? 'Every ' + s.interval_minutes + ' min' : 'Manual collection') + '</span><span>· ' + esc(humanDate(s.last_scan_at)) + '</span></div></div><div class="source-controls"><button class="scan-button" data-scan="' + s.id + '"' + (running ? ' disabled' : '') + '>' + (running ? 'Collecting…' : 'Collect records') + '</button><button class="settings-button" data-edit="' + s.id + '">Edit settings</button><button class="icon-button" data-full="' + s.id + '" aria-label="Recollect all pages from ' + esc(s.name) + '" title="Recollect all pages, ignoring cached pages"' + (running ? ' disabled' : '') + '>↻</button><button class="icon-button" data-delete="' + s.id + '" aria-label="Delete ' + esc(s.name) + '" title="Remove research site"' + (running ? ' disabled' : '') + '>×</button></div></article>';
   }).join('');
@@ -388,6 +404,46 @@ async function saveDolApiKey(event) {
   }
 }
 
+async function openSamKeyDialog() {
+  $('samKeyForm').reset();
+  $('samKeyMessage').textContent = '';
+  $('samApiKeyStatus').textContent = 'Checking current SAM.gov Alpha API key status…';
+  $('samKeyDialog').showModal();
+  try {
+    const status = await api('/api/integrations/sam');
+    $('samApiKeyStatus').textContent = status.configured
+      ? 'A SAM.gov Alpha/test API key is already saved locally. Enter a new key only if you want to replace it; it will be tested before replacement.'
+      : 'No SAM.gov Alpha/test API key is saved yet. Paste the test key below; the app will validate it against the official v4 Alpha Exclusions API.';
+  } catch (error) {
+    $('samApiKeyStatus').textContent = 'Could not check the current SAM API key status.';
+    $('samKeyMessage').textContent = error.message;
+  }
+  $('samApiKey').focus();
+}
+
+async function saveSamApiKey(event) {
+  event.preventDefault();
+  const button = $('saveSamKey');
+  const key = $('samApiKey').value.trim();
+  if (!key) return;
+  button.disabled = true;
+  $('samKeyMessage').textContent = 'Testing key with the SAM.gov Alpha Exclusions API…';
+  try {
+    const result = await api('/api/integrations/sam', {method:'POST', body:JSON.stringify({api_key:key})});
+    if (!result.validated) throw new Error('SAM.gov Alpha API key could not be validated.');
+    $('samKeyDialog').close();
+    $('samKeyForm').reset();
+    notify('SAM.gov Alpha API key tested and saved locally. Federal debarment collection is ready.');
+    state.sourceSignature = '';
+    await refreshAll();
+  } catch (error) {
+    $('samKeyMessage').textContent = error.message;
+    localEvent('ERROR', 'SAM.gov Alpha API key test failed: ' + error.message);
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function addSource(event) {
   event.preventDefault();
   const button = $('saveSource');
@@ -479,6 +535,7 @@ document.addEventListener('click', event => {
   if (!button) return;
   if (button.hasAttribute('data-open-source')) openSource(button.dataset.openSource, null);
   if (button.hasAttribute('data-dol-key')) openDolKeyDialog();
+  if (button.hasAttribute('data-sam-key')) openSamKeyDialog();
   if (button.dataset.record) viewRecord(+button.dataset.record);
   if (button.dataset.edit) openSource(null, state.sources.find(s => s.id === +button.dataset.edit));
   if (button.dataset.close) $(button.dataset.close).close();
@@ -501,7 +558,9 @@ document.addEventListener('click', event => {
 });
 $('sourceForm').addEventListener('submit', addSource);
 $('dolKeyForm').addEventListener('submit', saveDolApiKey);
+$('samKeyForm').addEventListener('submit', saveSamApiKey);
 $('oshaApiKeyButton').addEventListener('click', openDolKeyDialog);
+$('samApiKeyButton').addEventListener('click', openSamKeyDialog);
 $('confirmDelete').addEventListener('click', removeSource);
 $('refreshSources').addEventListener('click', refreshAll);
 $('helpButton').addEventListener('click', () => $('helpDialog').showModal());
