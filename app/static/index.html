@@ -132,7 +132,6 @@
   <form id="sourceForm">
     <label>Research site name<input id="sourceName" required maxlength="120" placeholder="Enter the actual website name" autocomplete="off"></label>
     <label>Website address<input id="sourceUrl" type="url" required placeholder="https://…" autocomplete="url"><small>Use the public listing, API, or directory endpoint you want to collect.</small></label>
-    <label id="dolApiKeyField" hidden>DOL Open Data API key<input id="dolApiKey" type="password" maxlength="512" autocomplete="new-password" placeholder="Paste the free DOL API key"><small id="dolApiKeyStatus">Required only for OSHA/DOL API requests. Stored locally on this computer and never added to the project.</small></label>
     <p class="setup-note">Adding a site configures collection. Extraction coverage will need checking against each actual source; fields the source does not provide remain unknown.</p>
     <details class="advanced"><summary>Collection settings <span>Optional</span></summary><div class="advanced-grid">
       <label>Page limit<input id="maxPages" type="number" min="1" max="250000" value="5000" required></label>
@@ -146,6 +145,17 @@
     </div></details>
     <div id="formMessage" class="form-message" role="status"></div>
     <div class="modal-actions"><button class="button subtle" type="button" data-close="sourceDialog">Cancel</button><button class="button primary" type="submit" id="saveSource">Save research site <span aria-hidden="true">↗</span></button></div>
+  </form>
+</dialog>
+<dialog id="dolKeyDialog" class="modal small-modal" aria-labelledby="dolKeyDialogTitle">
+  <div class="modal-top"><span class="section-kicker">BUILT-IN OSHA INTEGRATION</span><button class="close-button" data-close="dolKeyDialog" aria-label="Close OSHA API key setup">×</button></div>
+  <h2 id="dolKeyDialogTitle">Set the DOL API key.</h2>
+  <p class="modal-intro">OSHA is already hardcoded to the Department of Labor Open Data API. Paste the free API key here; the app will test it before saving it locally.</p>
+  <form id="dolKeyForm">
+    <label>DOL Open Data API key<input id="dolApiKey" type="password" required maxlength="512" autocomplete="new-password" placeholder="Paste API key"></label>
+    <p id="dolApiKeyStatus" class="setup-note">The key is stored only on this computer under .runtime and is never written to GitHub or bidder exports.</p>
+    <div id="dolKeyMessage" class="form-message" role="status"></div>
+    <div class="modal-actions"><button class="button subtle" type="button" data-close="dolKeyDialog">Cancel</button><button class="button primary" type="submit" id="saveDolKey">Test &amp; save API key <span aria-hidden="true">↗</span></button></div>
   </form>
 </dialog>
 <dialog id="recordDialog" class="modal record-modal" aria-labelledby="recordDialogTitle">
