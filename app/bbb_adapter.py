@@ -38,6 +38,11 @@ _TWELVE_MONTH_PATTERNS = (
 _COMPLAINT_DATE = re.compile(r"\bDate\s*:\s*([^|•]+?)(?=\s+(?:Type|Status|Resolved|Unresolved|Answered|Unanswered|Unpursuable)\s*:|$)", re.I)
 _COMPLAINT_TYPE = re.compile(r"\bType\s*:\s*([^|•]+?)(?=\s+(?:Date|Status|Resolved|Unresolved|Answered|Unanswered|Unpursuable)\s*:|$)", re.I)
 _COMPLAINT_STATUS = re.compile(r"\bStatus\s*:\s*(Resolved|Unresolved|Answered|Unanswered|Unpursuable)\b", re.I)
+_NO_RESULTS = re.compile(
+    r"\b(?:no\s+(?:matching\s+)?business(?:es)?|no\s+results?|0\s+results?|"
+    r"could(?:n['’]t|\s+not)\s+find\s+(?:any\s+)?(?:business(?:es)?|results?))\b",
+    re.I,
+)
 
 
 def _string(value) -> str:
@@ -526,17 +531,21 @@ class BbbComplaintsAdapter:
         page = _search_page(url)
         if page >= BBB_MAX_SEARCH_PAGES:
             return None
+        numeric_fallback = None
         for anchor in soup.find_all("a", href=True):
+            next_url = urljoin(url, anchor["href"])
+            if urlsplit(next_url).path.rstrip("/") != "/search":
+                continue
             label = " ".join([
                 anchor.get_text(" ", strip=True),
                 _string(anchor.get("aria-label")),
                 " ".join(anchor.get("rel") or []),
             ]).lower()
             if "next" in label:
-                next_url = urljoin(url, anchor["href"])
-                if urlsplit(next_url).path.rstrip("/") == "/search":
-                    return next_url
-        return None
+                return next_url
+            if _search_page(next_url) == page + 1:
+                numeric_fallback = numeric_fallback or next_url
+        return numeric_fallback
 
     def links(self, html: str, url: str) -> list[str]:
         parts = urlsplit(url)
@@ -546,17 +555,35 @@ class BbbComplaintsAdapter:
         if path == "/search":
             contexts = self._contexts_for_search(url)
             soup = BeautifulSoup(html, "lxml")
-            useful = False
-            for candidate in _search_candidates(html, url):
-                candidate_useful = self._remember_candidate(candidate, contexts)
-                useful = candidate_useful or useful
-                if candidate_useful and _profile_base(candidate["profile_url"]) in self.profile_contexts:
-                    links.append(_profile_base(candidate["profile_url"]))
+            candidates = _search_candidates(html, url)
+            page_text = soup.get_text(" ", strip=True)
 
-            # Only paginate when the page explicitly advertises a next page and
-            # no plausible candidate was found yet. This keeps each bidder lookup
-            # narrow while still handling noisy name searches.
-            if not useful:
+            # Fail closed when BBB returns a 200 page whose result structure is no
+            # longer recognizable. Otherwise a frontend redesign could look like
+            # "zero matches" and incorrectly write N for every bidder.
+            if not candidates and not _NO_RESULTS.search(page_text):
+                raise ValueError(
+                    "BBB search page layout was not recognized; refusing to create negative complaint results"
+                )
+
+            strong_location_candidate = False
+            for candidate in candidates:
+                candidate_useful = self._remember_candidate(candidate, contexts)
+                if not candidate_useful:
+                    continue
+                links.append(_profile_base(candidate["profile_url"]))
+                for key in contexts:
+                    if (
+                        self._name_exact(candidate.get("name") or "", key)
+                        and self._location_accepts(candidate, key)
+                    ):
+                        strong_location_candidate = True
+
+            # If page 1 only contains plausible same-name businesses in the wrong
+            # city, keep following BBB's explicit pagination rather than settling
+            # for an ambiguous match. Stop early once an exact name/location
+            # candidate is visible.
+            if not strong_location_candidate:
                 next_url = self._next_search_page(soup, url)
                 if next_url:
                     sig = (normalize_match_text(_search_term(url)), normalize_match_text(_search_location(url)))
