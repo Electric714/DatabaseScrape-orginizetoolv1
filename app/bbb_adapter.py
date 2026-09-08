@@ -548,8 +548,9 @@ class BbbComplaintsAdapter:
             soup = BeautifulSoup(html, "lxml")
             useful = False
             for candidate in _search_candidates(html, url):
-                useful = self._remember_candidate(candidate, contexts) or useful
-                if useful and _profile_base(candidate["profile_url"]) in self.profile_contexts:
+                candidate_useful = self._remember_candidate(candidate, contexts)
+                useful = candidate_useful or useful
+                if candidate_useful and _profile_base(candidate["profile_url"]) in self.profile_contexts:
                     links.append(_profile_base(candidate["profile_url"]))
 
             # Only paginate when the page explicitly advertises a next page and
