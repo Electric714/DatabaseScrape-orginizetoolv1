@@ -57,7 +57,7 @@ def test_live_gui_smoke(database, monkeypatch):
                 assert page.locator("#sourceSection").count() == 1
                 expect(page.get_by_role("heading", name="OSHA / DOL Enforcement API")).to_be_visible()
                 expect(page.get_by_role("button", name="Set API key")).to_be_visible()
-                expect(page.get_by_role("button", name="Collect OSHA")).to_be_disabled()
+                expect(page.get_by_role("button", name="Collect OSHA", exact=True)).to_be_disabled()
                 page.get_by_role("button", name="Set API key").click()
                 expect(page.locator("#dolKeyDialog")).to_be_visible()
                 expect(page.get_by_role("button", name="Test & save API key")).to_be_visible()
