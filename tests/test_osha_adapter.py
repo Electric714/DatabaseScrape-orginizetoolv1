@@ -1,4 +1,4 @@
-from datetime import date
+import json
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
@@ -8,48 +8,94 @@ from app.bidder_schema import BIDDER_COLUMNS, bidder_row
 from app.crawler import CrawlEngine
 from app.models import SourceCreate
 from app.osha_adapter import (
-    OSHA_DETAIL_PATH,
-    OSHA_FORM_PATH,
-    OSHA_SEARCH_PATH,
+    DOL_INSPECTION_ENDPOINT,
+    DOL_INSPECTION_PATH,
+    DOL_VIOLATION_PATH,
+    OSHA_MASTER_FIELDS,
     OshaEstablishmentAdapter,
     company_core,
-    parse_inspection_detail,
-    year_windows,
 )
 
 
-SEARCH_ROW = """
-<table>
-  <tr>
-    <th></th><th>#</th><th>Activity</th><th>Date Opened</th><th>RID</th><th>ST</th>
-    <th>Type</th><th>Scope</th><th>SIC</th><th>NAICS</th><th>Violations</th><th>Establishment Name</th>
-  </tr>
-  <tr>
-    <td></td><td>1</td>
-    <td><a href="/ords/imis/establishment.inspection_detail?id=305160491">305160491</a></td>
-    <td>04/29/2003</td><td>0521400</td><td>IL</td><td>Complaint</td><td>Partial</td>
-    <td>1623</td><td>237110</td><td>2</td><td>A-Lamp Concrete Contractors, Inc.</td>
-  </tr>
-  <tr>
-    <td></td><td>2</td>
-    <td><a href="/ords/imis/establishment.inspection_detail?id=999999999">999999999</a></td>
-    <td>01/01/2004</td><td>0000000</td><td>IL</td><td>Planned</td><td>Complete</td>
-    <td></td><td></td><td>5</td><td>Different Concrete Company LLC</td>
-  </tr>
-</table>
-"""
+INSPECTION_ROWS = {
+    "data": [
+        {
+            "activity_nr": "305160491",
+            "estab_name": "A-Lamp Concrete Contractors, Inc.",
+            "site_address": "800 W Irving Park Rd",
+            "site_city": "Schaumburg",
+            "site_state": "IL",
+            "site_zip": "60193",
+            "open_date": "2003-04-29",
+            "close_case_date": "2003-10-01",
+            "naics_code": "237110",
+        },
+        {
+            "activity_nr": "999999999",
+            "estab_name": "Different Concrete Company LLC",
+            "site_address": "1 Other Street",
+            "site_city": "Chicago",
+            "site_state": "IL",
+            "site_zip": "60601",
+            "open_date": "2004-01-01",
+            "close_case_date": "",
+            "naics_code": "238990",
+        },
+    ]
+}
 
-DETAIL = """
-<html><body>
-<h3>Inspection: 305160491 - A-Lamp Concrete Contractors, Inc.</h3>
-<div>Date Opened: 04/29/2003</div>
-<table>
-<tr><th>Violations/Penalties</th><th>Serious</th><th>Willful</th><th>Repeat</th><th>Other</th><th>Unclass</th><th>Total</th></tr>
-<tr><td>Initial Violations</td><td>1</td><td></td><td>1</td><td></td><td></td><td>2</td></tr>
-<tr><td>Current Violations</td><td>1</td><td>0</td><td>1</td><td>0</td><td>0</td><td>2</td></tr>
-</table>
-</body></html>
-"""
+VIOLATION_ROWS = {
+    "data": [
+        {
+            "activity_nr": "305160491",
+            "citation_id": "01001",
+            "delete_flag": "",
+            "viol_type": "S",
+            "issuance_date": "2003-05-01",
+            "current_penalty": "500",
+            "initial_penalty": "750",
+            "standard": "19260020",
+            "nr_instances": "1",
+            "nr_exposed": "2",
+        },
+        {
+            "activity_nr": "305160491",
+            "citation_id": "01002",
+            "delete_flag": "",
+            "viol_type": "R",
+            "issuance_date": "2003-05-01",
+            "current_penalty": "1000",
+            "initial_penalty": "1000",
+            "standard": "19260501",
+            "nr_instances": "1",
+            "nr_exposed": "1",
+        },
+        {
+            "activity_nr": "305160491",
+            "citation_id": "01003",
+            "delete_flag": "",
+            "viol_type": "O",
+            "issuance_date": "2003-05-01",
+            "current_penalty": "0",
+            "initial_penalty": "0",
+            "standard": "19040001",
+            "nr_instances": "1",
+            "nr_exposed": "1",
+        },
+        {
+            "activity_nr": "305160491",
+            "citation_id": "01004",
+            "delete_flag": "X",
+            "viol_type": "S",
+            "issuance_date": "2003-05-01",
+            "current_penalty": "0",
+            "initial_penalty": "250",
+            "standard": "19260021",
+            "nr_instances": "1",
+            "nr_exposed": "1",
+        },
+    ]
+}
 
 
 def bidder(**changes):
@@ -67,122 +113,143 @@ def bidder(**changes):
     return row
 
 
-def test_osha_adapter_uses_scoped_browser_session():
+def test_osha_adapter_is_authenticated_api_and_owns_only_three_fields(monkeypatch):
+    monkeypatch.setenv("DOL_API_KEY", "test-dol-api-key")
     adapter = OshaEstablishmentAdapter()
-    assert adapter.direct_browser is True
-    assert adapter.visible_browser is True
-    assert adapter.fail_fast_access_errors is True
-    assert adapter.browser_prime_url.endswith(OSHA_FORM_PATH)
-    assert adapter.browser_allowed_url("https://www.osha.gov" + OSHA_FORM_PATH)
-    assert adapter.browser_allowed_url("https://www.osha.gov" + OSHA_SEARCH_PATH + "?establishment=Example")
-    assert adapter.browser_allowed_url("https://www.osha.gov" + OSHA_DETAIL_PATH + "?id=123")
-    assert not adapter.browser_allowed_url("https://www.osha.gov/news")
-    assert not adapter.browser_allowed_url("https://example.com" + OSHA_SEARCH_PATH)
+
+    assert adapter.api_source is True
+    assert adapter.canonical_start_url == DOL_INSPECTION_ENDPOINT
+    assert adapter.master_fields == ("osha", "osha_severe_violations", "years")
+    assert set(adapter.master_fields) == set(OSHA_MASTER_FIELDS)
+    assert adapter.request_headers(DOL_INSPECTION_ENDPOINT)["X-API-KEY"] == "test-dol-api-key"
+    assert adapter.allowed_url(DOL_INSPECTION_ENDPOINT)
+    assert adapter.allowed_url("https://apiprod.dol.gov" + DOL_VIOLATION_PATH + "?limit=10")
+    assert not adapter.allowed_url("https://apiprod.dol.gov/v4/datasets")
+    assert not adapter.allowed_url("https://www.osha.gov/ords/imis/establishment.html")
 
 
 def test_company_core_handles_osha_punctuation_and_state_prefixes():
-    assert company_core("A. LAMP CONCRETE CONTRACTORS INC") == company_core("A-Lamp Concrete Contractors, Inc.")
-    assert company_core("8 ACES CONSTRUCTION INC") == company_core("106836 - 8 Aces Construction")
+    assert company_core("A. LAMP CONCRETE CONTRACTORS INC") == company_core(
+        "A-Lamp Concrete Contractors, Inc."
+    )
+    assert company_core("8 ACES CONSTRUCTION INC") == company_core(
+        "106836 - 8 Aces Construction"
+    )
     assert company_core("10330 EXCEEDING LLC") == "10330 exceeding"
 
 
-def test_osha_uses_ten_year_windows_from_1972():
-    windows = year_windows(date(2026, 9, 6))
-    assert windows[0] == (date(1972, 1, 1), date(1981, 12, 31))
-    assert windows[-1] == (date(2022, 1, 1), date(2026, 9, 6))
-    assert all((end.year - start.year) <= 9 for start, end in windows)
-
-
-def test_targeted_seed_urls_are_master_contractor_queries_only():
+def test_targeted_queries_use_master_names_without_putting_key_in_url(monkeypatch):
+    monkeypatch.setenv("DOL_API_KEY", "secret-test-key")
     adapter = OshaEstablishmentAdapter()
-    urls = adapter.seed_urls([bidder()], today=date(2026, 9, 6))
+    urls = adapter.seed_urls([bidder()])
+
     assert urls
-    assert all(urlsplit(url).path == OSHA_SEARCH_PATH for url in urls)
-    assert all(parse_qs(urlsplit(url).query)["p_case"] == ["all"] for url in urls)
-    assert all(parse_qs(urlsplit(url).query)["p_violations_exist"] == ["both"] for url in urls)
-    assert all("A" in parse_qs(urlsplit(url).query)["establishment"][0].upper() for url in urls)
+    for url in urls:
+        parts = urlsplit(url)
+        assert parts.hostname == "apiprod.dol.gov"
+        assert parts.path == DOL_INSPECTION_PATH
+        assert "secret-test-key" not in url
+        query = parse_qs(parts.query)
+        assert "filter_object" in query
+        filter_object = json.loads(query["filter_object"][0])
+        assert filter_object["field"] == "estab_name"
+        assert filter_object["operator"] == "like"
+        assert "A LAMP CONCRETE CONTRACTORS" in filter_object["value"]
+        requested_fields = set(query["fields"][0].split(","))
+        assert {"activity_nr", "estab_name", "site_state", "site_zip"} <= requested_fields
 
 
-def test_search_results_follow_only_exact_contractor_and_pagination():
+def test_inspection_and_violation_aggregation_writes_only_osha_fields(monkeypatch):
+    monkeypatch.setenv("DOL_API_KEY", "test-dol-api-key")
     adapter = OshaEstablishmentAdapter()
-    url = adapter.seed_urls([bidder()], today=date(2026, 9, 6))[0]
-    pagination = url + "&p_start=20&p_finish=40&p_direction=Next"
-    html = SEARCH_ROW + f'<a href="{pagination}">2</a>'
-    links = adapter.links(html, url)
-    assert any(OSHA_DETAIL_PATH in link and "305160491" in link for link in links)
-    assert not any("999999999" in link for link in links)
-    assert any("p_start=20" in link for link in links)
+    search_url = adapter.seed_urls([bidder()])[0]
 
+    links = adapter.links(json.dumps(INSPECTION_ROWS), search_url)
+    violation_url = next(link for link in links if urlsplit(link).path == DOL_VIOLATION_PATH)
+    assert "305160491" in violation_url
 
-def test_inspection_detail_and_aggregate_severe_criteria():
-    adapter = OshaEstablishmentAdapter()
-    search_url = adapter.seed_urls([bidder()], today=date(2026, 9, 6))[0]
-    links = adapter.links(SEARCH_ROW, search_url)
-    detail_url = next(link for link in links if OSHA_DETAIL_PATH in link)
-    assert adapter.extract(DETAIL, detail_url) == []
-
-    parsed = parse_inspection_detail(DETAIL, detail_url)
-    assert parsed["inspection_id"] == "305160491"
-    assert parsed["severe_current_violations"] == 2
-
+    assert adapter.extract(json.dumps(VIOLATION_ROWS), violation_url) == []
     record, = adapter.finalize_records(complete=True)
+
     assert record["company"] == "A. LAMP CONCRETE CONTRACTORS INC"
     assert record["osha"] == "Y"
     assert record["osha_severe_violations"] == "2"
     assert record["years"] == "2003"
-    assert "Serious + Willful + Repeat" in record["extra"]["severe_definition"]
+    assert record["extra"]["api_fields_written_to_master"] == list(OSHA_MASTER_FIELDS)
+    assert set(record["extra"]["identity_fields_used_for_matching_only"]) == {
+        "contractor_name", "related_companies", "address_1", "city", "state", "zip"
+    }
+    master_fields_present = set(record) & set(BIDDER_COLUMNS)
+    assert master_fields_present == set(OSHA_MASTER_FIELDS)
 
 
-def test_similar_name_candidate_stays_unknown_instead_of_false_negative():
+def test_similar_name_candidate_stays_unknown_instead_of_false_negative(monkeypatch):
+    monkeypatch.setenv("DOL_API_KEY", "test-dol-api-key")
     adapter = OshaEstablishmentAdapter()
-    search_url = adapter.seed_urls([bidder()], today=date(2026, 9, 6))[0]
-    html = """<table><tr><th></th><th>#</th><th>Activity</th><th>Establishment Name</th></tr><tr><td></td><td>1</td><td><a href="/ords/imis/establishment.inspection_detail?id=777">777</a></td><td>A Lamp Concrete Contracting Inc.</td></tr></table>"""
-    adapter.links(html, search_url)
+    search_url = adapter.seed_urls([bidder()])[0]
+    similar = {
+        "data": [{
+            "activity_nr": "777",
+            "estab_name": "A Lamp Concrete Contracting Inc.",
+            "site_address": "800 W Irving Park Rd",
+            "site_city": "Schaumburg",
+            "site_state": "IL",
+            "site_zip": "60193",
+            "open_date": "2025-01-01",
+        }]
+    }
+
+    adapter.links(json.dumps(similar), search_url)
     record, = adapter.finalize_records(complete=True)
+
     assert record["osha"] == ""
     assert record["extra"]["ambiguous_candidates"]
     assert "manual identity review" in record["osha_details"]
 
 
-def test_negative_osha_result_requires_complete_query_set():
+def test_negative_osha_result_requires_complete_api_run(monkeypatch):
+    monkeypatch.setenv("DOL_API_KEY", "test-dol-api-key")
     adapter = OshaEstablishmentAdapter()
-    adapter.seed_urls([bidder()], today=date(2026, 9, 6))
+    adapter.seed_urls([bidder()])
+
     assert adapter.finalize_records(complete=False) == []
+
     record, = adapter.finalize_records(complete=True)
     assert record["osha"] == "N"
     assert record["osha_severe_violations"] == ""
-    assert "No exact-name or plausible similar-name OSHA inspection match" in record["osha_details"]
+    assert record["years"] == ""
 
 
-async def test_osha_query_mode_crawls_master_and_proposes_update(database):
+async def test_osha_api_crawl_proposes_only_osha_owned_master_fields(database, monkeypatch):
+    monkeypatch.setenv("DOL_API_KEY", "integration-test-key")
     baseline = bidder()
     await bidder_db.import_rows("baseline.csv", [baseline], [])
 
     source_data = SourceCreate(
-        name="OSHA Establishment Search",
-        start_url="https://www.osha.gov/pls/imis/establishment.html",
+        name="OSHA / DOL Enforcement API",
+        start_url=DOL_INSPECTION_ENDPOINT,
         delay_ms=0,
         render_mode="http",
         max_pages=100,
         max_depth=3,
         concurrency=4,
+        respect_robots=False,
     ).model_dump(mode="json")
     source = await db.create_source(source_data)
 
     def site(request):
+        assert request.url.path != "/robots.txt"
+        assert request.headers.get("x-api-key") == "integration-test-key"
         path = request.url.path
-        if path == "/robots.txt":
-            raise AssertionError("OSHA proof-of-concept must not request robots.txt")
-        if path == OSHA_SEARCH_PATH:
-            query = parse_qs(request.url.query.decode())
-            # Put the known historical inspection in one decade. All other
-            # targeted windows are valid no-result searches.
-            if query.get("startyear") == ["2002"]:
-                return httpx.Response(200, text=SEARCH_ROW, headers={"content-type": "text/html"})
-            return httpx.Response(200, text="<html><body>Your search did not return any results.</body></html>", headers={"content-type": "text/html"})
-        if path == OSHA_DETAIL_PATH and request.url.params.get("id") == "305160491":
-            return httpx.Response(200, text=DETAIL, headers={"content-type": "text/html"})
-        return httpx.Response(404, text="not found", headers={"content-type": "text/html"})
+        if path == DOL_INSPECTION_PATH:
+            return httpx.Response(
+                200, json=INSPECTION_ROWS, headers={"content-type": "application/json"}
+            )
+        if path == DOL_VIOLATION_PATH:
+            return httpx.Response(
+                200, json=VIOLATION_ROWS, headers={"content-type": "application/json"}
+            )
+        return httpx.Response(404, text="not found")
 
     job_id = await db.create_job(source["id"], False)
     await CrawlEngine(source, job_id, transport=httpx.MockTransport(site)).run()
@@ -198,8 +265,17 @@ async def test_osha_query_mode_crawls_master_and_proposes_update(database):
     assert projected["years"] == "2003"
 
     result = await bidder_db.compare()
-    assert result["field_changes"] >= 1
+    assert result["field_changes"] == 3
     proposals = await bidder_db.list_proposals()
-    by_field = {proposal["field_name"]: proposal for proposal in proposals if proposal["proposal_type"] == "field_update"}
+    field_proposals = [
+        proposal for proposal in proposals
+        if proposal["proposal_type"] == "field_update"
+    ]
+    assert {proposal["field_name"] for proposal in field_proposals} == set(OSHA_MASTER_FIELDS)
+    assert all(proposal["field_name"] in OSHA_MASTER_FIELDS for proposal in field_proposals)
+
+    by_field = {proposal["field_name"]: proposal for proposal in field_proposals}
     assert by_field["osha"]["old_value"] == "N"
     assert by_field["osha"]["new_value"] == "Y"
+    assert by_field["osha_severe_violations"]["new_value"] == "2"
+    assert by_field["years"]["new_value"] == "2003"
