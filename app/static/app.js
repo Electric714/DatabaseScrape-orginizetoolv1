@@ -62,6 +62,8 @@ async function loadSources() {
   ]);
   state.sources = sources;
   state.dolStatus = dolStatus;
+  $('oshaApiKeyButton').textContent = dolStatus.configured ? 'Change OSHA API key' : 'Set OSHA API key';
+  $('oshaApiKeyButton').title = dolStatus.configured ? 'Replace and validate the locally saved DOL API key' : 'Enter and validate the DOL API key required for OSHA collection';
   $('sourceCount').textContent = sources.length < 6 ? sources.length + ' / 6' : sources.length + ' configured';
   $('navSources').textContent = sources.length < 6 ? sources.length + '/6' : sources.length;
   $('sitesHint').textContent = sources.length < 6 ? (6 - sources.length) + ' site' + (sources.length === 5 ? '' : 's') + ' awaiting setup' : 'Ready for collection and source review';
@@ -499,6 +501,7 @@ document.addEventListener('click', event => {
 });
 $('sourceForm').addEventListener('submit', addSource);
 $('dolKeyForm').addEventListener('submit', saveDolApiKey);
+$('oshaApiKeyButton').addEventListener('click', openDolKeyDialog);
 $('confirmDelete').addEventListener('click', removeSource);
 $('refreshSources').addEventListener('click', refreshAll);
 $('helpButton').addEventListener('click', () => $('helpDialog').showModal());
