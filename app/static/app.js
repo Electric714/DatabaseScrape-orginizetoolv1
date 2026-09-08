@@ -1,7 +1,9 @@
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const safeUrl = value => { try { const u = new URL(value); return ['http:', 'https:'].includes(u.protocol) ? u.href : '#'; } catch { return '#'; } };
-const state = {sources: [], sourceSignature: '', jobsSignature: '', events: [], cursor: 0, paused: false, follow: true, level: 'all', offset: 0, total: 0, refreshing: false, online: null, deleteId: null, recordSequence: 0, detailSequence: 0, batchUpdating: false, editingId: null, bidderStatus: null, proposalSignature: ''};
+const state = {sources: [], sourceSignature: '', jobsSignature: '', events: [], cursor: 0, paused: false, follow: true, level: 'all', offset: 0, total: 0, refreshing: false, online: null, deleteId: null, recordSequence: 0, detailSequence: 0, batchUpdating: false, editingId: null, bidderStatus: null, proposalSignature: '', dolStatus: null};
+const OSHA_HOSTS = new Set(['www.osha.gov', 'apiprod.dol.gov', 'api.dol.gov']);
+const OSHA_API_URL = 'https://apiprod.dol.gov/v4/get/OSHA/inspection/json';
 const PAGE_SIZE = 50;
 let toastTimer;
 
@@ -41,8 +43,14 @@ function setOnline(online) {
   $('health').innerHTML = '<i></i><span>' + (online ? 'Workspace online' : 'Reconnecting') + '</span>';
 }
 function isCollecting(source) { return ['queued', 'running'].includes(source.last_status); }
+function isOshaSource(source) {
+  try { return OSHA_HOSTS.has(new URL(source.start_url).hostname.toLowerCase()); } catch { return false; }
+}
+function sourceReadyForCollection(source) {
+  return !isCollecting(source) && (!isOshaSource(source) || Boolean(state.dolStatus?.configured));
+}
 function updateCollectionButton() {
-  const available = state.sources.filter(s => !isCollecting(s)).length;
+  const available = state.sources.filter(sourceReadyForCollection).length;
   $('updateSites').disabled = state.batchUpdating || available === 0;
   $('updateSites').textContent = state.batchUpdating ? 'Queuing collections…' : 'Update configured sites';
   $('updateSites').title = available ? 'Collect updated records from ' + available + ' available research sites' : (state.sources.length ? 'All configured sites are already collecting' : 'Set up a research site first');
@@ -70,15 +78,12 @@ async function loadSources() {
   $('sourceFilter').innerHTML = '<option value="">All research sites</option>' + sources.map(s => '<option value="' + s.id + '">' + esc(s.name) + '</option>').join('');
   $('sourceFilter').value = sources.some(s => String(s.id) === selection) ? selection : '';
 
-  const oshaHosts = new Set(['www.osha.gov', 'apiprod.dol.gov', 'api.dol.gov']);
-  const fixedOshaUrl = 'https://apiprod.dol.gov/v4/get/OSHA/inspection/json';
   const configured = sources.map((s, index) => {
     const running = isCollecting(s);
-    let isOsha = false;
-    try { isOsha = oshaHosts.has(new URL(s.start_url).hostname.toLowerCase()); } catch {}
+    const isOsha = isOshaSource(s);
     if (isOsha) {
       const keyState = dolStatus.configured ? 'API key configured' : 'API key required';
-      return '<article class="source-row"><div class="source-avatar" aria-hidden="true">' + (index + 1) + '</div><div class="source-info"><h3>OSHA / DOL Enforcement API</h3><a class="source-url" href="' + fixedOshaUrl + '" target="_blank" rel="noreferrer">' + fixedOshaUrl + '</a><div class="source-details"><span class="tag ' + (dolStatus.configured ? 'completed' : 'partial') + '">' + keyState + '</span><span>Built-in REST source</span><span>· ' + esc(humanDate(s.last_scan_at)) + '</span></div></div><div class="source-controls"><button class="settings-button" data-dol-key>Set API key</button><button class="scan-button" data-scan="' + s.id + '"' + (running || !dolStatus.configured ? ' disabled' : '') + '>' + (running ? 'Collecting…' : 'Collect OSHA') + '</button><button class="icon-button" data-full="' + s.id + '" aria-label="Recollect OSHA API records" title="Recollect OSHA API records, ignoring cached responses"' + (running || !dolStatus.configured ? ' disabled' : '') + '>↻</button></div></article>';
+      return '<article class="source-row"><div class="source-avatar" aria-hidden="true">' + (index + 1) + '</div><div class="source-info"><h3>OSHA / DOL Enforcement API</h3><a class="source-url" href="' + OSHA_API_URL + '" target="_blank" rel="noreferrer">' + OSHA_API_URL + '</a><div class="source-details"><span class="tag ' + (dolStatus.configured ? 'completed' : 'partial') + '">' + keyState + '</span><span>Built-in REST source</span><span>· ' + esc(humanDate(s.last_scan_at)) + '</span></div></div><div class="source-controls"><button class="settings-button" data-dol-key>Set API key</button><button class="scan-button" data-scan="' + s.id + '"' + (running || !dolStatus.configured ? ' disabled' : '') + '>' + (running ? 'Collecting…' : 'Collect OSHA') + '</button><button class="icon-button" data-full="' + s.id + '" aria-label="Recollect OSHA API records" title="Recollect OSHA API records, ignoring cached responses"' + (running || !dolStatus.configured ? ' disabled' : '') + '>↻</button></div></article>';
     }
     return '<article class="source-row"><div class="source-avatar" aria-hidden="true">' + (index + 1) + '</div><div class="source-info"><h3>' + esc(s.name) + '</h3><a class="source-url" href="' + esc(safeUrl(s.start_url)) + '" target="_blank" rel="noreferrer">' + esc(s.start_url) + '</a><div class="source-details"><span class="tag ' + esc(s.last_status || '') + '">' + esc(s.last_status || 'Ready to collect') + '</span><span>' + (s.auto_scan ? 'Every ' + s.interval_minutes + ' min' : 'Manual collection') + '</span><span>· ' + esc(humanDate(s.last_scan_at)) + '</span></div></div><div class="source-controls"><button class="scan-button" data-scan="' + s.id + '"' + (running ? ' disabled' : '') + '>' + (running ? 'Collecting…' : 'Collect records') + '</button><button class="settings-button" data-edit="' + s.id + '">Edit settings</button><button class="icon-button" data-full="' + s.id + '" aria-label="Recollect all pages from ' + esc(s.name) + '" title="Recollect all pages, ignoring cached pages"' + (running ? ' disabled' : '') + '>↻</button><button class="icon-button" data-delete="' + s.id + '" aria-label="Delete ' + esc(s.name) + '" title="Remove research site"' + (running ? ' disabled' : '') + '>×</button></div></article>';
   }).join('');
@@ -406,7 +411,7 @@ async function scan(id, full) {
 }
 async function updateSites() {
   if (state.batchUpdating) return;
-  const available = state.sources.filter(s => !isCollecting(s));
+  const available = state.sources.filter(sourceReadyForCollection);
   if (!available.length) return;
   state.batchUpdating = true;
   updateCollectionButton();
