@@ -156,9 +156,18 @@ async def test_sam_api_crawl_proposes_only_positive_debarment_and_never_stores_k
     projected = bidder_row(stored, fallback_id=False)
     assert projected["state_federal_debarment"] == "Y"
 
-    page = await db.get_page(source["id"], stored["source_url"])
-    assert page is not None
-    assert "integration-secret-sam-key" not in page["url"]
+    # Inspect every persisted crawl URL directly. The contractor-level aggregate
+    # evidence URL need not be byte-for-byte identical to the canonical page-cache
+    # key, but no persisted page may contain the credential.
+    with db.connect() as conn:
+        page_urls = [
+            row["url"] for row in conn.execute(
+                "SELECT url FROM pages WHERE source_id=? ORDER BY id", (source["id"],)
+            ).fetchall()
+        ]
+    assert page_urls
+    assert all("integration-secret-sam-key" not in url for url in page_urls)
+    assert all("api_key=" not in url.lower() for url in page_urls)
 
     result = await bidder_db.compare()
     assert result["field_changes"] == 1
