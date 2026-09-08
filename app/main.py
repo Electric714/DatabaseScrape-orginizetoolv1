@@ -287,6 +287,8 @@ async def get_sources():
 async def post_source(payload: SourceCreate):
     data = payload.model_dump(mode="json")
     data["start_url"] = canonicalize_url(str(payload.start_url))
+    if (urlsplit(data["start_url"]).hostname in OSHA_SOURCE_HOSTS:
+        raise HTTPException(status_code=409, detail="OSHA is built in. Use the Set API key button on the OSHA card.")
     try:
         await validate_public_url(data["start_url"])
     except ValueError as exc:
@@ -303,6 +305,11 @@ async def post_source(payload: SourceCreate):
 
 @app.patch("/api/sources/{source_id}")
 async def patch_source(source_id: int, payload: SourceUpdate):
+    source = await db.get_source(source_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="Source not found")
+    if _is_osha_source(source):
+        raise HTTPException(status_code=409, detail="OSHA is a built-in source and cannot be edited here")
     result = await db.update_source(source_id, payload.model_dump(exclude_unset=True))
     if not result:
         raise HTTPException(status_code=404, detail="Source not found")
@@ -316,6 +323,11 @@ async def delete_source(source_id: int):
 
 
 async def _delete_source(source_id: int):
+    source = await db.get_source(source_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="Source not found")
+    if _is_osha_source(source):
+        raise HTTPException(status_code=409, detail="OSHA is built in and cannot be removed")
     running = await db.running_job_for_source(source_id)
     if running:
         raise HTTPException(status_code=409, detail="Stop/wait for the active crawl before deleting this source")
