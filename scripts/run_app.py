@@ -63,6 +63,8 @@ def main():
                     if not args.no_browser:
                         webbrowser.open(f"http://127.0.0.1:{port}/?v={APP_VERSION}")
                     return 0
+            except RuntimeError:
+                raise
             except Exception:
                 pass
     if sock is None:
