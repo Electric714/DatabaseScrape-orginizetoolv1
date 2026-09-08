@@ -1,5 +1,6 @@
 from app import main
 from app.osha_adapter import DOL_INSPECTION_ENDPOINT
+from app.models import SourceCreate, SourceUpdate
 
 
 async def test_builtin_osha_source_is_created_once(database):
@@ -86,3 +87,35 @@ async def test_rejected_api_key_is_not_saved(database, monkeypatch):
         raise AssertionError("Invalid DOL key should be rejected")
 
     assert saved == []
+
+
+async def test_builtin_osha_cannot_be_edited_deleted_or_duplicated(database):
+    source = await main.ensure_builtin_osha_source()
+
+    try:
+        await main.patch_source(source["id"], SourceUpdate(name="Changed OSHA"))
+    except Exception as exc:
+        assert getattr(exc, "status_code", None) == 409
+    else:
+        raise AssertionError("Built-in OSHA source should not be editable")
+
+    try:
+        await main._delete_source(source["id"])
+    except Exception as exc:
+        assert getattr(exc, "status_code", None) == 409
+    else:
+        raise AssertionError("Built-in OSHA source should not be removable")
+
+    duplicate = SourceCreate(
+        name="Duplicate OSHA",
+        start_url=DOL_INSPECTION_ENDPOINT,
+        render_mode="http",
+        respect_robots=False,
+    )
+    try:
+        await main.post_source(duplicate)
+    except Exception as exc:
+        assert getattr(exc, "status_code", None) == 409
+        assert "built in" in str(getattr(exc, "detail", "")).lower()
+    else:
+        raise AssertionError("Generic source setup should not create a second OSHA source")
