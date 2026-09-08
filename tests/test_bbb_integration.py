@@ -308,7 +308,8 @@ async def test_bbb_full_crawl_proposes_only_bbb_complaint_field(database):
     def site(request):
         path = request.url.path
         if path == "/search":
-            query = parse_qs(str(request.url.query))
+            raw_query = request.url.query.decode() if isinstance(request.url.query, bytes) else str(request.url.query)
+            query = parse_qs(raw_query)
             assert query["find_text"][0]
             assert "Schaumburg" in query["find_loc"][0]
             return httpx.Response(200, text=A_LAMP_SEARCH_HTML, headers={"content-type": "text/html"})
