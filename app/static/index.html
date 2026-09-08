@@ -24,7 +24,7 @@
     <div class="local-badge"><span class="status-dot"></span> Local paralegal database</div>
     <p>Collected records are saved on this computer and remain searchable after a restart.</p>
     <button class="help-link" id="helpButton">How to use this tool <span aria-hidden="true">↗</span></button>
-    <div class="version">DATABASE TOOL <span id="appVersion">0.4.1</span></div>
+    <div class="version">DATABASE TOOL <span id="appVersion">0.5.0</span></div>
   </div>
 </aside>
 <main id="workspace">
@@ -95,7 +95,7 @@
         </div>
       </section>
       <section class="surface sources-panel" id="sourceSection" aria-labelledby="sourcesTitle">
-        <div class="section-heading"><div><div class="section-kicker">COLLECT / SIX RESEARCH SITES</div><h2 id="sourcesTitle">Your research sites <span id="sourceCount">0 / 6</span></h2><p id="siteSetupNote">OSHA is built in. Add the DOL API key once, then collect OSHA records from the master bidder list.</p></div><div class="source-heading-actions"><button class="button primary small" id="oshaApiKeyButton" type="button">Set OSHA API key</button><button class="button subtle small" id="updateSites" disabled>Update configured sites</button></div></div>
+        <div class="section-heading"><div><div class="section-kicker">COLLECT / SIX RESEARCH SITES</div><h2 id="sourcesTitle">Your research sites <span id="sourceCount">0 / 6</span></h2><p id="siteSetupNote">OSHA/DOL and SAM.gov Federal Debarment are built in. Add their API keys once, then collect against the master bidder list.</p></div><div class="source-heading-actions"><button class="button primary small" id="oshaApiKeyButton" type="button">Set OSHA API key</button><button class="button primary small" id="samApiKeyButton" type="button">Set SAM test API key</button><button class="button subtle small" id="updateSites" disabled>Update configured sites</button></div></div>
         <div id="sources"><div class="loading-state">Loading your research sites…</div></div>
         <div class="section-footer"><span>Collected records are saved to the local database.</span><button class="text-button" id="refreshSources">↻ Refresh status</button></div>
       </section>
@@ -156,6 +156,17 @@
     <p id="dolApiKeyStatus" class="setup-note">The key is stored only on this computer under .runtime and is never written to GitHub or bidder exports.</p>
     <div id="dolKeyMessage" class="form-message" role="status"></div>
     <div class="modal-actions"><button class="button subtle" type="button" data-close="dolKeyDialog">Cancel</button><button class="button primary" type="submit" id="saveDolKey">Test &amp; save API key <span aria-hidden="true">↗</span></button></div>
+  </form>
+</dialog>
+<dialog id="samKeyDialog" class="modal small-modal" aria-labelledby="samKeyDialogTitle">
+  <div class="modal-top"><span class="section-kicker">BUILT-IN FEDERAL DEBARMENT INTEGRATION</span><button class="close-button" data-close="samKeyDialog" aria-label="Close SAM API key setup">×</button></div>
+  <h2 id="samKeyDialogTitle">Set the SAM.gov test API key.</h2>
+  <p class="modal-intro">Federal debarment is hardcoded to the official SAM.gov Exclusions API v4 Alpha/test endpoint. Paste the Alpha API key here; the app will test it before saving it locally.</p>
+  <form id="samKeyForm">
+    <label>SAM.gov Alpha/test API key<input id="samApiKey" type="password" required maxlength="512" autocomplete="new-password" placeholder="Paste SAM.gov test API key"></label>
+    <p id="samApiKeyStatus" class="setup-note">The key is stored only on this computer under .runtime. It is injected into SAM requests at fetch time and is never written to source URLs, GitHub, bidder exports, or activity logs.</p>
+    <div id="samKeyMessage" class="form-message" role="status"></div>
+    <div class="modal-actions"><button class="button subtle" type="button" data-close="samKeyDialog">Cancel</button><button class="button primary" type="submit" id="saveSamKey">Test &amp; save API key <span aria-hidden="true">↗</span></button></div>
   </form>
 </dialog>
 <dialog id="recordDialog" class="modal record-modal" aria-labelledby="recordDialogTitle">
