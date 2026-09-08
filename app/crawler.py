@@ -364,7 +364,8 @@ class CrawlEngine:
             await db.increment_job(self.job_id, errors=1)
             await db.upsert_page(self.source_id, url, last_error=safe_error[:1000])
             if getattr(self.adapter, "fail_fast_access_errors", False) and (
-                "HTTP 401" in safe_error or "HTTP 403" in safe_error or "access challenge" in safe_error.lower()
+                "HTTP 401" in safe_error or "HTTP 403" in safe_error or "HTTP 429" in safe_error
+                or "access challenge" in safe_error.lower()
             ):
                 raise
             return []
