@@ -34,34 +34,40 @@ Blank values from a website never erase an existing master value. Dismissed find
 
 The master table can be searched and exported in the exact 30-column CSV, Excel, or JSON format expected by the existing bidder database.
 
-## OSHA proof of concept — Source 1
+## OSHA / DOL REST API — Source 1
 
-The first real source integration is OSHA's Establishment Search:
+The OSHA integration uses the U.S. Department of Labor Open Data REST API instead of scraping OSHA's HTML establishment-search pages.
 
-- user-provided legacy URL: `https://www.osha.gov/pls/imis/establishment.html`
-- current OSHA route used by the adapter: `https://www.osha.gov/ords/imis/establishment.html`
-- query endpoint: `/ords/imis/establishment.search`
-- inspection detail endpoint: `/ords/imis/establishment.inspection_detail`
+- API base: `https://apiprod.dol.gov/v4`
+- inspection dataset: `/get/OSHA/inspection/json`
+- violation dataset: `/get/OSHA/violation/json`
 
-This adapter is **master-database driven**. It does not crawl OSHA generally. Before running it, import the law firm's bidder CSV. A scan then builds OSHA establishment searches only for the contractors and related-company names in that approved master database.
+Before collection, import the firm's bidder CSV. The adapter builds targeted API queries only for each approved `contractor_name` and any `related_companies`. It uses `address_1`, `city`, `state`, and `zip` only to resolve identity when more than one exact normalized company name could match. Similar-but-nonexact names remain unresolved for human review rather than being silently treated as the contractor.
 
-For this proof of concept, the OSHA adapter explicitly **skips the generic `robots.txt` policy gate**. OSHA currently rejects both the generic HTTP crawler and headless Chromium from the local proof-of-concept with HTTP 403. The OSHA source therefore opens a normal visible Chromium window on the operator desktop, first loads the public establishment form, retains normal session state, and then navigates the public search/detail pages. Browser egress remains hard-limited to `www.osha.gov` and only the establishment form, search, and inspection-detail paths. It does not implement CAPTCHA solving, stealth fingerprinting, credential bypass, or arbitrary browser navigation. The override applies to the OSHA POC adapter only.
+The DOL Open Data API requires an API key for data requests. DOL describes registration as a free API account. The key can be pasted into the OSHA source setup, where it is stored only in `.runtime/dol_api_key.txt`, or supplied through the `DOL_API_KEY` environment variable. `.runtime/` and `.env` are ignored by Git. The application sends the key only in the `X-API-KEY` request header; it is never placed in a URL, source record, activity event, export, or API response.
 
-OSHA's public search limits a single inspection-date query to ten years, so the adapter searches consecutive ten-year windows from 1972 through the current date. It searches open and closed cases and both inspections with and without violations. Result rows are accepted automatically only when the OSHA establishment name exactly matches the contractor/related-company name after conservative punctuation and legal-suffix normalization. Similar names are retained as unresolved candidates so a spelling variation cannot silently create a false negative; they are not treated as authoritative matches.
+OSHA is authoritative for only three fields in the firm's 30-column bidder database:
 
-For the proof of concept, the OSHA fields mean:
+- `osha`
+- `osha_severe_violations`
+- `years`
 
-- `osha = Y` — at least one exact-name OSHA inspection match was found.
-- `osha = N` — no exact-name inspection match and no plausible similar-name candidate was found **and the entire targeted scan completed without errors/limits**. Similar-but-unresolved names remain unknown rather than being converted to N.
-- `osha_severe_violations` — sum of the inspection detail page's **current Serious + Willful + Repeat** violations across matched inspections.
-- `years` — years in which a matched inspection has at least one current Serious, Willful, or Repeat violation.
+The remaining 27 bidder fields belong to the other research sources and are not written by the OSHA adapter. Contractor name and location fields are matching inputs only.
 
-The severe-violation definition is an explicit proof-of-concept rule and can be changed if the law firm's actual criterion differs. On a partial/error scan, positive OSHA existence can still be retained, but the adapter deliberately does not issue a negative finding or an aggregate severe count that could be incomplete.
+For this integration, the OSHA fields mean:
 
-The adapter stores inspection IDs, detail URLs, dates, current violation categories, search terms, query count, and the aggregate-completeness flag as source evidence. These details remain outside the firm's flat 30-column export.
+- `osha = Y` — at least one exact normalized OSHA inspection match was found.
+- `osha = N` — no exact match and no plausible similar-name candidate was found, and the entire targeted API collection completed without errors or limits.
+- blank `osha` — a plausible similar-name result exists and needs identity review, or a partial/error run cannot support a negative conclusion.
+- `osha_severe_violations` — count of non-deleted OSHA violation rows classified Serious, Willful, or Repeat across the matched inspections.
+- `years` — years associated with those Serious, Willful, or Repeat citations, using the inspection open year only when the citation year is unavailable.
+
+Inspection IDs, establishment/location fields, dates, citation IDs, violation types, penalties, matching terms, unresolved candidates, and completeness flags are retained as source evidence outside the flat 30-column export. That evidence supports review without letting OSHA overwrite fields it does not own.
+
+Because this is a documented REST API integration, the application does not navigate OSHA pages, launch a special browser session, or apply website `robots.txt` logic for these API requests.
 
 ## Query-focused source integrations
-Five website names and URLs are still **pending**. Source 1 is now the OSHA Establishment Search proof of concept; the remaining five positions are ready for the other sources.
+Five website names and URLs are still **pending**. Source 1 is now the OSHA / DOL REST API integration; the remaining five positions are ready for the other sources.
 
 The master database, comparison/review workflow, exports, crawl engine, and generic fallback extractor are in place. What is **not finished yet** is the site-specific query logic. Once the actual sites are supplied, each adapter must be tested against real examples and should define: the contractor/company query inputs; search-form or public endpoint behavior; result matching and identity rules; pagination/detail-page navigation; which bidder fields that site is authoritative for; and exactly what constitutes a positive, negative, unknown, or historical finding.
 
