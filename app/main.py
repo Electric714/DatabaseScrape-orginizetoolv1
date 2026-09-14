@@ -34,9 +34,14 @@ from .security import PublicTransport, validate_public_url
 from .runtime import single_instance
 from .models import OshaStatus, ResearchField, ScanOptions, SourceCreate, SourceUpdate
 from .bidder_schema import BIDDER_COLUMNS, bidder_row, parse_bidder_csv
-from .osha_adapter import DOL_INSPECTION_ENDPOINT
-from .sam_adapter import SAM_EXCLUSIONS_ENDPOINT
+from .osha_adapter import DOL_INSPECTION_ENDPOINT, _rows as parse_dol_rows
+from .sam_adapter import SAM_EXCLUSIONS_ENDPOINT, _payload as parse_sam_payload
 from .bbb_adapter import BBB_SEARCH_ENDPOINT
+from .state_adapter import MN_URL
+from .violation_tracker_adapter import VT_URL
+from .source_catalog import SOURCE_CATALOG, field_map
+from .adapters import adapter_for_url
+from .config import get_dol_api_key, get_sam_api_key
 
 TASKS: dict[int, asyncio.Task] = {}
 SCHEDULER_TASK: asyncio.Task | None = None
@@ -154,11 +159,11 @@ async def ensure_builtin_bbb_source() -> dict:
         "auto_scan": False,
         "interval_minutes": 1440,
         "max_pages": 5000,
-        "max_depth": 2,
+        "max_depth": 5,
         "concurrency": 1,
         "delay_ms": 1500,
         "render_mode": "auto",
-        "respect_robots": False,
+        "respect_robots": True,
     }
     if existing:
         changed = {
@@ -193,6 +198,7 @@ async def validate_dol_api_key(api_key: str) -> None:
         raise ValueError("DOL rejected this API key")
     if response.status_code < 200 or response.status_code >= 300:
         raise ValueError(f"DOL API key test failed with HTTP {response.status_code}")
+    parse_dol_rows(response.text)
 
 
 async def validate_sam_api_key(api_key: str) -> None:
@@ -221,23 +227,30 @@ async def validate_sam_api_key(api_key: str) -> None:
         raise ValueError("SAM.gov Alpha rate limit reached; try the key again after the limit resets")
     if response.status_code < 200 or response.status_code >= 300:
         raise ValueError(f"SAM.gov Alpha API key test failed with HTTP {response.status_code}")
+    parse_sam_payload(response.text)
 
 
-async def launch_scan(source_id: int, force_full: bool = False) -> dict:
+async def launch_scan(source_id: int, force_full: bool = False, master_ids=None) -> dict:
     async with SCAN_LOCK:
-        return await _launch_scan(source_id, force_full)
+        return await _launch_scan(source_id, force_full, master_ids)
 
 
-async def _launch_scan(source_id: int, force_full: bool = False) -> dict:
+async def _launch_scan(source_id: int, force_full: bool = False, master_ids=None) -> dict:
     source = await db.get_source(source_id)
     if not source:
         raise HTTPException(status_code=404, detail="Source not found")
+    if not getattr(adapter_for_url(source["start_url"]), "query_mode", False):
+        raise HTTPException(status_code=422, detail="This POC only runs registered targeted source adapters")
+    if master_ids is not None:
+        known = {r["_master_id"] for r in await bidder_db.all_rows()}
+        if not master_ids or not set(master_ids) <= known:
+            raise HTTPException(status_code=422, detail="Select existing master contractors")
     running = await db.running_job_for_source(source_id)
     if running:
         return running
     job_id = await db.create_job(source_id, force_full)
     activity.emit("INFO", "Scan queued", source_id=source_id, job_id=job_id, mode="full" if force_full else "incremental")
-    engine = CrawlEngine(source, job_id, force_full=force_full)
+    engine = CrawlEngine(source, job_id, force_full=force_full, master_ids=master_ids)
     task = asyncio.create_task(engine.run(), name=f"crawl-job-{job_id}")
     TASKS[job_id] = task
 
@@ -286,6 +299,7 @@ async def lifespan(_app: FastAPI):
         await ensure_builtin_osha_source()
         await ensure_builtin_sam_source()
         await ensure_builtin_bbb_source()
+        await ensure_poc_sources()
         activity.install()
         activity.emit("INFO", "Paralegal Database Tool started. Ready to maintain the master bidder database and collect public-record evidence.", version=activity.APP_VERSION)
         await db.mark_interrupted_jobs()
@@ -423,6 +437,7 @@ async def get_sources():
     osha = await ensure_builtin_osha_source()
     sam = await ensure_builtin_sam_source()
     bbb = await ensure_builtin_bbb_source()
+    await ensure_poc_sources()
     sources = await db.list_sources()
     order = {osha["id"]: 0, sam["id"]: 1, bbb["id"]: 2}
     return sorted(sources, key=lambda source: (order.get(source["id"], 3), source["id"]))
@@ -497,7 +512,7 @@ async def _delete_source(source_id: int):
 @app.post("/api/sources/{source_id}/scan")
 async def scan_source(source_id: int, options: ScanOptions | None = None):
     options = options or ScanOptions()
-    return await launch_scan(source_id, force_full=options.force_full)
+    return await launch_scan(source_id, force_full=options.force_full, master_ids=options.master_ids)
 
 
 @app.get("/api/jobs")
@@ -755,3 +770,29 @@ def spreadsheet_text(value):
     if value.lstrip().startswith(("=", "+", "-", "@")):
         return "'" + value
     return value
+
+
+async def ensure_poc_sources():
+    sources = await db.list_sources()
+    for name, url in [("Violation Tracker", VT_URL), ("Minnesota OSP debarment", MN_URL)]:
+        if not any(s["start_url"] == url for s in sources):
+            await db.create_source(SourceCreate(name=name, start_url=url, concurrency=1, delay_ms=1500, max_depth=8, max_pages=50, render_mode="http", respect_robots=True).model_dump(mode="json"))
+
+
+@app.get("/api/source-catalog")
+async def source_catalog():
+    return {"sources": SOURCE_CATALOG, "field_map": field_map()}
+
+
+@app.post("/api/integrations/{integration}/test")
+async def test_saved_key(integration: str):
+    if integration not in {"dol", "sam"}:
+        raise HTTPException(status_code=404, detail="Unknown integration")
+    key = get_dol_api_key() if integration == "dol" else get_sam_api_key()
+    if not key:
+        raise HTTPException(status_code=422, detail="API key missing")
+    try:
+        await (validate_dol_api_key(key) if integration == "dol" else validate_sam_api_key(key))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"validated": True, "integration": integration}

@@ -5,6 +5,8 @@ from .extractor import discover_links, extract_records
 from .osha_adapter import OshaEstablishmentAdapter
 from .sam_adapter import SamExclusionsAdapter
 from .bbb_adapter import BbbComplaintsAdapter
+from .state_adapter import MinnesotaDebarmentAdapter
+from .violation_tracker_adapter import ViolationTrackerAdapter
 
 
 class SourceAdapter(Protocol):
@@ -36,6 +38,8 @@ ADAPTERS: dict[str, type[GenericAdapter]] = {
     "api.dol.gov": OshaEstablishmentAdapter,
     "api-alpha.sam.gov": SamExclusionsAdapter,
     "api.sam.gov": SamExclusionsAdapter,
+    "violationtracker.goodjobsfirst.org": ViolationTrackerAdapter,
+    "mn.gov": MinnesotaDebarmentAdapter,
     "www.bbb.org": BbbComplaintsAdapter,
     "bbb.org": BbbComplaintsAdapter,
 }

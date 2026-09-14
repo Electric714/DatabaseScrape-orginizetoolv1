@@ -6,6 +6,7 @@ from contextlib import closing
 from typing import Any
 
 from . import database as db
+from .source_catalog import owned_fields
 from .bidder_schema import (
     BIDDER_COLUMNS,
     BIDDER_DB_COLUMNS,
@@ -18,8 +19,8 @@ from .bidder_schema import (
 
 def _db_values(row: dict[str, Any]) -> dict[str, str]:
     return {
-        "bidder_id": str(row.get("id") or "").strip(),
-        **{column: str(row.get(column) or "").strip() for column in BIDDER_COLUMNS[1:]},
+        "bidder_id": str(row.get("id") or ""),
+        **{column: str(row.get(column) or "") for column in BIDDER_COLUMNS[1:]},
     }
 
 
@@ -98,7 +99,7 @@ def _import_rows(filename: str, rows: list[dict[str, str]], warnings: list[str])
         import_id = int(cur.lastrowid)
 
         for raw in rows:
-            incoming = {column: str(raw.get(column) or "").strip() for column in BIDDER_COLUMNS}
+            incoming = {column: str(raw.get(column) or "") for column in BIDDER_COLUMNS}
             existing, _ = _find_match(conn, incoming)
             if existing is None:
                 try:
@@ -253,50 +254,48 @@ def _compare() -> dict[str, Any]:
         conn.execute("BEGIN IMMEDIATE")
         conn.execute("DELETE FROM bidder_proposals WHERE status='pending'")
         source_rows = conn.execute(
-            """SELECT r.*,s.name AS source_name FROM records r
+            """SELECT r.*,s.name AS source_name,s.start_url AS source_start_url FROM records r
                JOIN sources s ON s.id=r.source_id
                WHERE r.active=1 ORDER BY r.id"""
         ).fetchall()
 
         for raw_source in source_rows:
             source = dict(raw_source)
+            extra = json.loads(source.get("extra_json") or "{}")
+            allowed = owned_fields(source["source_start_url"])
+            if not allowed or extra.get("environment") == "alpha_test" or "api-alpha.sam.gov" in source["source_start_url"]:
+                continue
+            # A failed refresh cannot resurrect an old clean result. Keep evidence
+            # visible in Results, but require a successful current observation.
+            latest = conn.execute("SELECT id,status FROM crawl_jobs WHERE source_id=? ORDER BY id DESC LIMIT 1", (source["source_id"],)).fetchone()
+            if latest and (latest["status"] not in {"completed", "partial"} or extra.get("job_id") != latest["id"]):
+                continue
             incoming = bidder_row(source, fallback_id=False)
             if not incoming.get("contractor_name"):
                 continue
 
-            master, reason = _find_match(conn, incoming)
+            if extra.get("master_id"):
+                master = conn.execute("SELECT * FROM bidder_master WHERE pk=?", (extra["master_id"],)).fetchone()
+                reason = "targeted_master_id"
+            else:
+                master, reason = _find_match(conn, incoming)
             source_record_id = int(source["id"])
             source_name = str(source.get("source_name") or "")
             source_url = str(source.get("source_url") or "")
             detected = db.utcnow()
 
             if master is None:
-                proposal_type = "ambiguous" if reason == "ambiguous_contractor_name" else "new_record"
-                payload = json.dumps(
-                    {column: incoming.get(column, "") for column in BIDDER_COLUMNS}, ensure_ascii=False
-                )
-                sig = _signature(None, source_record_id, proposal_type, None, "", payload)
-                if _was_dismissed(conn, sig):
-                    dismissed_skipped += 1
-                    continue
-                conn.execute(
-                    """INSERT INTO bidder_proposals
-                       (signature,source_record_id,proposal_type,proposed_json,source_name,source_url,
-                        match_reason,status,detected_at)
-                       VALUES (?,?,?,?,?,?,?,'pending',?)""",
-                    (sig, source_record_id, proposal_type, payload, source_name, source_url, reason, detected),
-                )
-                created += 1
-                if proposal_type == "ambiguous":
-                    ambiguous += 1
-                else:
-                    new_contractors += 1
+                # The CSV is the only source of contractors. Research never adds businesses.
                 continue
 
             current = _master_external(master)
-            for field in BIDDER_COLUMNS:
+            for field in allowed:
                 new_value = str(incoming.get(field) or "").strip()
                 if not new_value:
+                    continue
+                if (new_value == "N" or new_value == "0") and not extra.get("complete_aggregate", False):
+                    continue
+                if field == "state_federal_debarment" and new_value != "Y":
                     continue
                 old_value = str(current.get(field) or "").strip()
                 if bidder_values_equal(old_value, new_value):
@@ -394,36 +393,20 @@ def _apply(proposal_id: int) -> dict[str, Any]:
             )
 
         if proposal["proposal_type"] == "new_record":
-            incoming = json.loads(proposal["proposed_json"] or "{}")
-            existing, _ = _find_match(conn, incoming)
-            if existing:
-                conn.execute(
-                    "UPDATE bidder_proposals SET status='superseded',resolved_at=? WHERE id=?",
-                    (now, proposal_id),
-                )
-                conn.commit()
-                return {"id": proposal_id, "status": "superseded", "master_id": existing["pk"]}
+            raise ValueError("Research cannot add contractors; import them from the master CSV")
 
-            master_pk = _insert_master(conn, incoming)
-            conn.execute(
-                """INSERT INTO bidder_master_history
-                   (master_pk,field_name,old_value,new_value,source_record_id,source_name,source_url,applied_at)
-                   VALUES (?,'__new_record__','',?,?,?,?,?)""",
-                (
-                    master_pk,
-                    json.dumps(incoming, ensure_ascii=False),
-                    proposal["source_record_id"],
-                    proposal["source_name"],
-                    proposal["source_url"],
-                    now,
-                ),
-            )
-            conn.execute(
-                "UPDATE bidder_proposals SET status='applied',master_pk=?,resolved_at=? WHERE id=?",
-                (master_pk, now, proposal_id),
-            )
-            conn.commit()
-            return {"id": proposal_id, "status": "applied", "master_id": master_pk}
+        evidence = conn.execute("SELECT r.*,s.start_url FROM records r JOIN sources s ON s.id=r.source_id WHERE r.id=?", (proposal["source_record_id"],)).fetchone()
+        if not evidence or proposal["field_name"] not in owned_fields(evidence["start_url"]) or "api-alpha.sam.gov" in evidence["start_url"]:
+            raise ValueError("Source does not own this field; compare again")
+        extra = json.loads(evidence["extra_json"] or "{}")
+        if proposal["new_value"] in {"N", "0"} and not extra.get("complete_aggregate", False):
+            raise ValueError("Incomplete evidence cannot clear a field")
+        current_evidence = bidder_row(dict(evidence), fallback_id=False)
+        if current_evidence.get(proposal["field_name"]) != proposal["new_value"]:
+            raise ValueError("Research evidence changed; compare again")
+        latest = conn.execute("SELECT id,status FROM crawl_jobs WHERE source_id=? ORDER BY id DESC LIMIT 1", (evidence["source_id"],)).fetchone()
+        if latest and (latest["status"] not in {"completed", "partial"} or extra.get("job_id") != latest["id"]):
+            raise ValueError("Research is stale or incomplete; collect and compare again")
 
         field = str(proposal["field_name"] or "")
         if field not in BIDDER_COLUMNS:
@@ -433,6 +416,8 @@ def _apply(proposal_id: int) -> dict[str, Any]:
         if not master:
             raise ValueError("The matching master contractor no longer exists")
         old_value = str(master[db_field] or "")
+        if old_value.strip() != str(proposal["old_value"] or "").strip():
+            raise ValueError("Master value changed since comparison; compare again")
         new_value = str(proposal["new_value"] or "")
 
         if db_field == "bidder_id" and new_value:

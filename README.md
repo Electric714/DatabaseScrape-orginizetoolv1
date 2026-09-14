@@ -1,5 +1,16 @@
 # Paralegal Database Tool
 
+## Current proof-of-concept status (2026-09-14)
+
+**Read [the current POC review](docs/POC-REVIEW.md) first.** It supersedes the older implementation notes below. The master CSV is the only contractor list. Select contractors before research; source-owned findings are compared separately. PACER is excluded, OSHA/DOL share one collector, Minnesota OSP is implemented, and Violation Tracker has a provisional HTML adapter. SAM Alpha is test evidence only. BBB/Violation Tracker live access is blocked; API lookups need credentials. Overall retrieval feasibility is not yet proven.
+
+The review records aggregate validation outcomes and limits without publishing contractor-specific evidence. Research does not add contractors or infer clean results from blocked/partial searches.
+
+---
+
+## Earlier implementation notes (historical; current review takes precedence)
+
+
 This project is a **Paralegal Database Tool** for maintaining and updating a law firm's contractor/bidder due-diligence database. It combines the firm's existing 30-column bidder database with targeted research against **six designated public-record websites**, preserves the source evidence behind every collected finding, and gives a paralegal a controlled review step before new information changes the approved master database.
 
 The central workflow is **import the existing bidder CSV → run source-specific contractor queries → collect only the relevant public-record findings → compare those findings with the approved master → review highlighted differences → approve or dismiss updates → search/export the current master database**.
