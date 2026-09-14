@@ -6,10 +6,10 @@ names, addresses, IDs, or contractor data.
 from __future__ import annotations
 
 import io
+import json
 import re
 from collections import Counter
-from html import unescape
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import urljoin
 
 import httpx
 from bs4 import BeautifulSoup
@@ -22,6 +22,7 @@ OH_CANDIDATES = [
     "https://procure.ohio.gov/state-and-local-agencies/resources/08_debarment-csv-list",
     "https://procure.ohio.gov/bidders-and-suppliers/resources/08_debarment-csv-list",
 ]
+STATIC_MARKERS = ("Vendor Name/Address", "Agency of Origin", "Effective Date", "Notice of Default")
 
 
 def summary(label: str, response: httpx.Response) -> None:
@@ -37,27 +38,30 @@ def html_structure(label: str, response: httpx.Response) -> BeautifulSoup:
     for tag in soup.find_all(True):
         for value in tag.get("class") or []:
             classes[value] += 1
-    print(f"[{label}] common_classes={classes.most_common(10)}")
+    print(f"[{label}] common_classes={classes.most_common(8)}")
     return soup
 
 
-def script_shape(script_text: str) -> str:
-    prefix = script_text[:180]
-    return re.sub(r"[A-Za-z0-9]", "x", prefix)
+def _walk_strings(value, path="$", depth=0):
+    if depth > 14:
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            yield from _walk_strings(item, f"{path}.{key}", depth + 1)
+    elif isinstance(value, list):
+        for index, item in enumerate(value[:50]):
+            yield from _walk_strings(item, f"{path}[{index}]", depth + 1)
+    elif isinstance(value, str):
+        yield path, value
 
 
-def embedded_html_shape(label: str, script_text: str) -> None:
-    decoded = unescape(script_text).replace('\\"', '"').replace("\\n", "\n")
-    embedded = BeautifulSoup(decoded, "lxml")
-    print(
-        f"[{label}] embedded tags={{'table':{len(embedded.find_all('table'))},'tr':{len(embedded.find_all('tr'))},"
-        f"'li':{len(embedded.find_all('li'))},'p':{len(embedded.find_all('p'))},'a':{len(embedded.find_all('a'))}}}"
-    )
-    tables = embedded.find_all("table")
-    for index, table in enumerate(tables[:3]):
-        headers = [cell.get_text(" ", strip=True) for cell in table.find_all(["th", "td"])[:4]]
-        safe_headers = [value for value in headers if value in {"Vendor Name/Address", "Agency of Origin", "Effective Date", "Notice of Default"}]
-        print(f"[{label}] embedded_table{index}_rows={len(table.find_all('tr'))} recognized_headers={safe_headers}")
+def _container_at(value, path: str):
+    # Probe helper only: find the nearest container by walking path tokens.
+    current = value
+    tokens = re.findall(r"\.([^\.\[]+)|\[(\d+)\]", path[1:])
+    for key, index in tokens[:-1]:
+        current = current[int(index)] if index else current[key]
+    return current
 
 
 def probe_florida(client: httpx.Client) -> None:
@@ -65,53 +69,69 @@ def probe_florida(client: httpx.Client) -> None:
         response = client.get(url)
         summary(label, response)
         soup = html_structure(label, response)
-        scripts = [s.get_text() for s in soup.find_all("script") if s.get_text()]
+        scripts = [s.get_text() for s in soup.find_all("script") if s.get_text().lstrip().startswith("{")]
         marker_scripts = [value for value in scripts if "Vendor Name/Address" in value or "no vendors" in value.casefold()]
-        print(f"[{label}] scripts={len(scripts)} marker_scripts={len(marker_scripts)}")
-        for index, value in enumerate(marker_scripts[:2]):
-            print(f"[{label}] marker_script{index}_len={len(value)} attrs_shape={script_shape(value)!r}")
-            embedded_html_shape(label, value)
+        print(f"[{label}] json_scripts={len(scripts)} marker_scripts={len(marker_scripts)}")
+        if len(marker_scripts) != 1:
+            print(f"[{label}] json_shape_unresolved=true")
+            continue
+        try:
+            payload = json.loads(marker_scripts[0])
+        except json.JSONDecodeError:
+            print(f"[{label}] json_parse=false")
+            continue
+        print(f"[{label}] top_keys={sorted(payload.keys())}")
+        hits = []
+        for path, text in _walk_strings(payload):
+            folded = text.casefold()
+            if any(marker.casefold() in folded for marker in STATIC_MARKERS) or "no vendors" in folded:
+                hits.append((path, text))
+        print(f"[{label}] marker_value_paths={[path for path, _ in hits]}")
+        for path, text in hits[:8]:
+            container = _container_at(payload, path)
+            print(
+                f"[{label}] path={path} string_len={len(text)} starts_markup={text.lstrip().startswith('<')} "
+                f"container_type={type(container).__name__} container_keys={sorted(container.keys()) if isinstance(container, dict) else None}"
+            )
+            if "<" in text and ">" in text:
+                embedded = BeautifulSoup(text, "lxml")
+                tables = embedded.find_all("table")
+                recognized = []
+                for marker in STATIC_MARKERS:
+                    if marker.casefold() in embedded.get_text(" ", strip=True).casefold():
+                        recognized.append(marker)
+                print(f"[{label}] embedded tables={len(tables)} rows={sum(len(t.find_all('tr')) for t in tables)} recognized={recognized}")
 
 
 def probe_missouri(client: httpx.Client) -> None:
     response = client.get(MO_PAGE)
     summary("MO landing", response)
-    soup = html_structure("MO landing", response)
-    candidates = []
-    for anchor in soup.find_all("a", href=True):
-        href = urljoin(str(response.url), anchor["href"])
-        if ".pdf" in href.casefold():
-            candidates.append((anchor.get_text(" ", strip=True), href))
-    raw_pdf_paths = sorted(set(re.findall(r"(?:https?://[^\"'<>\s]+|/[^\"'<>\s]+)\.pdf", response.text, re.I)))
-    print(f"[MO landing] anchor_pdf_links={len(candidates)} raw_pdf_paths={len(raw_pdf_paths)}")
-    for path in raw_pdf_paths:
-        print(f"[MO landing] raw_pdf_path host={urlsplit(urljoin(str(response.url), path + '.pdf')).hostname} path={urlsplit(urljoin(str(response.url), path + '.pdf')).path}")
-    target_url = None
-    for text, href in candidates:
-        if "suspven" in (text + href).casefold() or "suspend" in text.casefold() or "debar" in text.casefold():
-            target_url = href
-            break
-    if target_url is None:
-        raw_target = next((path + ".pdf" for path in raw_pdf_paths if "suspven" in path.casefold()), None)
-        if raw_target:
-            target_url = urljoin(str(response.url), raw_target)
-    if target_url is None:
+    html_structure("MO landing", response)
+    pdf_paths = sorted(set(re.findall(r"(?:https?://[^\"'<>\s]+\.pdf|/[^\"'<>\s]+\.pdf)", response.text, re.I)))
+    target = next((path for path in pdf_paths if "suspven" in path.casefold()), None)
+    print(f"[MO landing] pdf_paths={len(pdf_paths)} targeted_path_found={bool(target)}")
+    if not target:
         print("[MO] acquisition_target_unresolved=true")
         return
-    pdf = client.get(target_url)
+    pdf_url = urljoin(str(response.url), target)
+    pdf = client.get(pdf_url)
     summary("MO pdf", pdf)
     if not pdf.content.startswith(b"%PDF"):
         print("[MO pdf] valid_pdf=false")
         return
     reader = PdfReader(io.BytesIO(pdf.content), strict=False)
-    texts = [(page.extract_text(extraction_mode="layout") or "") for page in reader.pages]
-    text = "\n".join(texts)
+    text = "\n".join((page.extract_text(extraction_mode="layout") or "") for page in reader.pages)
     folded = text.casefold()
     lines = [line for line in text.splitlines() if line.strip()]
     date_re = re.compile(r"\b\d{1,2}/\d{1,2}/\d{2,4}\b")
     date_lines = [line for line in lines if date_re.search(line)]
     multi_date_lines = [line for line in date_lines if len(date_re.findall(line)) >= 2]
-    print(f"[MO pdf] pages={len(reader.pages)} text_chars={len(text)} nonempty_lines={len(lines)} date_lines={len(date_lines)} multi_date_lines={len(multi_date_lines)} tokens={{'suspended':{'suspend' in folded},'debarred':{'debar' in folded},'effective':{'effective' in folded},'vendor':{'vendor' in folded},'reason':{'reason' in folded}}}")
+    print(
+        f"[MO pdf] pages={len(reader.pages)} text_chars={len(text)} nonempty_lines={len(lines)} "
+        f"date_lines={len(date_lines)} multi_date_lines={len(multi_date_lines)} "
+        f"tokens={{'suspended':{'suspend' in folded},'debarred':{'debar' in folded},'effective':{'effective' in folded},"
+        f"'vendor':{'vendor' in folded},'reason':{'reason' in folded},'address':{'address' in folded}}}"
+    )
 
 
 def probe_ohio(client: httpx.Client) -> None:
@@ -119,14 +139,7 @@ def probe_ohio(client: httpx.Client) -> None:
     for index, url in enumerate(OH_CANDIDATES):
         response = client.get(url)
         summary(f"OH {index}", response)
-        if response.status_code >= 400:
-            continue
-        soup = html_structure(f"OH {index}", response)
-        text = soup.get_text(" ", strip=True).casefold()
-        links = [urljoin(str(response.url), a["href"]) for a in soup.find_all("a", href=True)]
-        csv_links = [href for href in links if ".csv" in href.casefold()]
-        print(f"[OH {index}] tokens={{'debarment':{'debar' in text},'vendor':{'vendor' in text},'supplier':{'supplier' in text}}} csv_links={len(csv_links)}")
-        if soup.find("table") or csv_links:
+        if response.status_code < 400:
             success = True
     if not success:
         print("[OH] acquisition_unresolved=true")
