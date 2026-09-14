@@ -27,9 +27,17 @@ def test_live_gui_smoke(database, monkeypatch):
     class FixtureEngine(CrawlEngine):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs, transport=httpx.MockTransport(site))
+    original_adapter_for_url = main.adapter_for_url
+    class FixtureQueryAdapter:
+        query_mode = True
+    def registered_fixture_adapter(url):
+        if str(url).startswith("https://fixture.test/"):
+            return FixtureQueryAdapter()
+        return original_adapter_for_url(url)
     async def public(url):
         return ["93.184.216.34"]
     monkeypatch.setattr(main, "CrawlEngine", FixtureEngine)
+    monkeypatch.setattr(main, "adapter_for_url", registered_fixture_adapter)
     monkeypatch.setattr(main, "validate_public_url", public)
     monkeypatch.setattr(main, "dol_api_key_configured", lambda: False)
     monkeypatch.setattr(main, "sam_api_key_configured", lambda: False)
