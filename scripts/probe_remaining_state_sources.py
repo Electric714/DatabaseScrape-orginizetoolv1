@@ -8,6 +8,7 @@ from __future__ import annotations
 import io
 import re
 from collections import Counter
+from html import unescape
 from urllib.parse import urljoin, urlsplit
 
 import httpx
@@ -36,22 +37,27 @@ def html_structure(label: str, response: httpx.Response) -> BeautifulSoup:
     for tag in soup.find_all(True):
         for value in tag.get("class") or []:
             classes[value] += 1
-    print(f"[{label}] common_classes={classes.most_common(12)}")
+    print(f"[{label}] common_classes={classes.most_common(10)}")
     return soup
 
 
-def describe_static_marker(label: str, soup: BeautifulSoup, needle: str) -> None:
-    node = soup.find(string=lambda value: value and needle.casefold() in value.casefold())
-    if not node:
-        print(f"[{label}] marker={needle!r} found=false")
-        return
-    tag = node.parent
-    parent = tag.parent if tag else None
+def script_shape(script_text: str) -> str:
+    prefix = script_text[:180]
+    return re.sub(r"[A-Za-z0-9]", "x", prefix)
+
+
+def embedded_html_shape(label: str, script_text: str) -> None:
+    decoded = unescape(script_text).replace('\\"', '"').replace("\\n", "\n")
+    embedded = BeautifulSoup(decoded, "lxml")
     print(
-        f"[{label}] marker={needle!r} found=true tag={getattr(tag, 'name', None)} "
-        f"class={getattr(tag, 'attrs', {}).get('class')} parent={getattr(parent, 'name', None)} "
-        f"parent_class={getattr(parent, 'attrs', {}).get('class')}"
+        f"[{label}] embedded tags={{'table':{len(embedded.find_all('table'))},'tr':{len(embedded.find_all('tr'))},"
+        f"'li':{len(embedded.find_all('li'))},'p':{len(embedded.find_all('p'))},'a':{len(embedded.find_all('a'))}}}"
     )
+    tables = embedded.find_all("table")
+    for index, table in enumerate(tables[:3]):
+        headers = [cell.get_text(" ", strip=True) for cell in table.find_all(["th", "td"])[:4]]
+        safe_headers = [value for value in headers if value in {"Vendor Name/Address", "Agency of Origin", "Effective Date", "Notice of Default"}]
+        print(f"[{label}] embedded_table{index}_rows={len(table.find_all('tr'))} recognized_headers={safe_headers}")
 
 
 def probe_florida(client: httpx.Client) -> None:
@@ -59,43 +65,44 @@ def probe_florida(client: httpx.Client) -> None:
         response = client.get(url)
         summary(label, response)
         soup = html_structure(label, response)
-        text = soup.get_text(" ", strip=True).casefold()
-        print(f"[{label}] expected_tokens={{'vendor':{'vendor' in text},'list':{'list' in text},'no_vendors':{'no vendors' in text}}}")
-        for marker in ("Vendor Name/Address", "Agency of Origin", "Effective Date", "Notice of Default", "no vendors"):
-            describe_static_marker(label, soup, marker)
-        notice_links = [a for a in soup.find_all("a", href=True) if "notice of default" in a.get_text(" ", strip=True).casefold()]
-        print(f"[{label}] notice_links={len(notice_links)}")
-        if notice_links:
-            tag = notice_links[0]
-            chain = []
-            for _ in range(5):
-                tag = tag.parent
-                if not tag:
-                    break
-                chain.append((tag.name, tag.get("class")))
-            print(f"[{label}] first_notice_ancestor_chain={chain}")
+        scripts = [s.get_text() for s in soup.find_all("script") if s.get_text()]
+        marker_scripts = [value for value in scripts if "Vendor Name/Address" in value or "no vendors" in value.casefold()]
+        print(f"[{label}] scripts={len(scripts)} marker_scripts={len(marker_scripts)}")
+        for index, value in enumerate(marker_scripts[:2]):
+            print(f"[{label}] marker_script{index}_len={len(value)} attrs_shape={script_shape(value)!r}")
+            embedded_html_shape(label, value)
 
 
 def probe_missouri(client: httpx.Client) -> None:
     response = client.get(MO_PAGE)
     summary("MO landing", response)
     soup = html_structure("MO landing", response)
-    pdf_links = []
+    candidates = []
     for anchor in soup.find_all("a", href=True):
         href = urljoin(str(response.url), anchor["href"])
         if ".pdf" in href.casefold():
-            pdf_links.append((anchor.get_text(" ", strip=True), href))
-    print(f"[MO landing] pdf_links={len(pdf_links)}")
-    for text, href in pdf_links:
-        print(f"[MO landing] pdf_candidate text={text!r} host={urlsplit(href).hostname} path={urlsplit(href).path}")
-    target = next(((text, href) for text, href in pdf_links if "suspven" in (text + href).casefold() or "suspend" in text.casefold() or "debar" in text.casefold()), None)
-    if not target:
-        raise SystemExit("Missouri official page exposed no targeted suspension/debarment PDF link")
-    _, target_url = target
+            candidates.append((anchor.get_text(" ", strip=True), href))
+    raw_pdf_paths = sorted(set(re.findall(r"(?:https?://[^\"'<>\s]+|/[^\"'<>\s]+)\.pdf", response.text, re.I)))
+    print(f"[MO landing] anchor_pdf_links={len(candidates)} raw_pdf_paths={len(raw_pdf_paths)}")
+    for path in raw_pdf_paths:
+        print(f"[MO landing] raw_pdf_path host={urlsplit(urljoin(str(response.url), path + '.pdf')).hostname} path={urlsplit(urljoin(str(response.url), path + '.pdf')).path}")
+    target_url = None
+    for text, href in candidates:
+        if "suspven" in (text + href).casefold() or "suspend" in text.casefold() or "debar" in text.casefold():
+            target_url = href
+            break
+    if target_url is None:
+        raw_target = next((path + ".pdf" for path in raw_pdf_paths if "suspven" in path.casefold()), None)
+        if raw_target:
+            target_url = urljoin(str(response.url), raw_target)
+    if target_url is None:
+        print("[MO] acquisition_target_unresolved=true")
+        return
     pdf = client.get(target_url)
     summary("MO pdf", pdf)
     if not pdf.content.startswith(b"%PDF"):
-        raise SystemExit("Missouri linked resource is not a PDF")
+        print("[MO pdf] valid_pdf=false")
+        return
     reader = PdfReader(io.BytesIO(pdf.content), strict=False)
     texts = [(page.extract_text(extraction_mode="layout") or "") for page in reader.pages]
     text = "\n".join(texts)
@@ -110,11 +117,7 @@ def probe_missouri(client: httpx.Client) -> None:
 def probe_ohio(client: httpx.Client) -> None:
     success = False
     for index, url in enumerate(OH_CANDIDATES):
-        try:
-            response = client.get(url)
-        except httpx.HTTPError as exc:
-            print(f"[OH {index}] error={type(exc).__name__}")
-            continue
+        response = client.get(url)
         summary(f"OH {index}", response)
         if response.status_code >= 400:
             continue
@@ -122,8 +125,7 @@ def probe_ohio(client: httpx.Client) -> None:
         text = soup.get_text(" ", strip=True).casefold()
         links = [urljoin(str(response.url), a["href"]) for a in soup.find_all("a", href=True)]
         csv_links = [href for href in links if ".csv" in href.casefold()]
-        download_links = [href for href in links if "download" in href.casefold() or "debar" in href.casefold()]
-        print(f"[OH {index}] expected_tokens={{'debarment':{'debar' in text},'vendor':{'vendor' in text},'supplier':{'supplier' in text}}} csv_links={len(csv_links)} debar_or_download_links={len(download_links)}")
+        print(f"[OH {index}] tokens={{'debarment':{'debar' in text},'vendor':{'vendor' in text},'supplier':{'supplier' in text}}} csv_links={len(csv_links)}")
         if soup.find("table") or csv_links:
             success = True
     if not success:
