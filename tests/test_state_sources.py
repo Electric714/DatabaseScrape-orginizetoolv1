@@ -23,7 +23,7 @@ def contractor(**changes):
     return {
         **dict.fromkeys(BIDDER_COLUMNS, ""),
         "id": "001",
-        "contractor_name": "Seven Brothers Painting, Inc.",
+        "contractor_name": "Example Painting, Inc.",
         "address_1": "100 Main St",
         "city": "Oak Creek",
         "state": "WI",
@@ -37,7 +37,7 @@ IL_HTML = """
 <h1>Public Works Debarred Contractors</h1>
 <p>LIST OF CONTRACTORS PROHIBITED FROM AN AWARD OF A CONTRACT OR A SUBCONTRACT FOR PUBLIC WORKS PROJECTS</p>
 <p>Pursuant to the Prevailing Wage Act, the following contractors are prohibited.</p>
-<p>Seven Brothers Painting, Inc. has been debarred from any public works project for a period of four years effective May 5, 2025</p>
+<p>Example Painting, Inc. has been debarred from any public works project for a period of four years effective May 5, 2025</p>
 </body></html>
 """
 
@@ -46,7 +46,7 @@ List of Debarred, Suspended and Ineligible Contractors
 Prepared and Issued by Wisconsin Department of Transportation
 Debarred Contractors
 Name of Contractor Address Effective Date Termination Date Action Restricted Area Acting Agency Cause Code
-Seven Brothers Painting, Inc. 100 Main St Oak Creek, WI 53154 5/5/2025 5/5/2029 Debarment Statewide WisDOT 3
+Example Painting, Inc. 100 Main St Oak Creek, WI 53154 5/5/2025 5/5/2029 Debarment Statewide WisDOT 3
 Ineligible Contractors
 Suspended Contractors
 """
@@ -55,7 +55,7 @@ Suspended Contractors
 def test_illinois_parser_and_exact_match_positive():
     entries = parse_illinois(IL_HTML)
     assert entries == [{
-        "name": "Seven Brothers Painting, Inc.",
+        "name": "Example Painting, Inc.",
         "effective": "2025-05-05",
         "termination": "2029-05-05",
         "source_url": IL_URL,
@@ -72,7 +72,7 @@ def test_illinois_parser_and_exact_match_positive():
 
 def test_illinois_does_not_promote_near_name_or_bad_layout():
     adapter = IllinoisDebarmentAdapter()
-    adapter.seed_urls([contractor(contractor_name="Seven Brothers Painting LLC")])
+    adapter.seed_urls([contractor(contractor_name="Example Painting LLC")])
     adapter.links(IL_HTML, IL_URL)
     record, = adapter.finalize_records(True)
     assert record["state_federal_debarment"] == ""
