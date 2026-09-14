@@ -1,0 +1,47 @@
+name: Apply state source integration
+
+on:
+  push:
+    branches:
+      - poc/state-debarment-wi-il
+    paths:
+      - scripts/apply_state_sources_patch.py
+      - .github/workflows/apply-state-sources.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: poc/state-debarment-wi-il
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Apply integration patch
+        run: python scripts/apply_state_sources_patch.py
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Verify Python tests
+        run: pytest -q --ignore=tests/test_browser.py
+      - name: Verify JavaScript syntax
+        run: node --check app/static/app.js
+      - name: Verify clean diff
+        run: git diff --check
+      - name: Commit verified integration
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app README.md docs requirements.txt
+          if git diff --cached --quiet; then
+            echo "No integration changes to commit"
+            exit 0
+          fi
+          git commit -m "Integrate Illinois and Wisconsin debarment sources"
+          git push origin HEAD:poc/state-debarment-wi-il
