@@ -125,6 +125,9 @@ def test_live_gui_smoke(database, monkeypatch):
                 expect(page.locator("#masterCount")).to_have_text("2", timeout=10000)
                 expect(page.locator("#uploadCsvButton")).to_have_text("Import another CSV", timeout=10000)
                 expect(page.locator("#records")).to_contain_text("Example Builders P1", timeout=10000)
+                expect(page.locator("#researchContractors option")).to_have_count(2, timeout=10000)
+                contractor_values = page.locator("#researchContractors option").evaluate_all("options => options.map(option => option.value)")
+                page.locator("#researchContractors").select_option(contractor_values)
                 sticky_positions = page.evaluate("""() => {
                     const wrap = document.querySelector('.bidder-table-wrap');
                     wrap.scrollLeft = wrap.scrollWidth;
