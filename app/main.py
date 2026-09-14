@@ -38,6 +38,7 @@ from .osha_adapter import DOL_INSPECTION_ENDPOINT, _rows as parse_dol_rows
 from .sam_adapter import SAM_EXCLUSIONS_ENDPOINT, _payload as parse_sam_payload
 from .bbb_adapter import BBB_SEARCH_ENDPOINT
 from .state_adapter import MN_URL
+from .state_sources import IL_URL, WI_URL
 from .violation_tracker_adapter import VT_URL
 from .source_catalog import SOURCE_CATALOG, field_map
 from .adapters import adapter_for_url
@@ -774,7 +775,12 @@ def spreadsheet_text(value):
 
 async def ensure_poc_sources():
     sources = await db.list_sources()
-    for name, url in [("Violation Tracker", VT_URL), ("Minnesota OSP debarment", MN_URL)]:
+    for name, url in [
+        ("Violation Tracker", VT_URL),
+        ("Minnesota OSP debarment", MN_URL),
+        ("Illinois public works debarment", IL_URL),
+        ("Wisconsin DOT debarment", WI_URL),
+    ]:
         if not any(s["start_url"] == url for s in sources):
             await db.create_source(SourceCreate(name=name, start_url=url, concurrency=1, delay_ms=1500, max_depth=8, max_pages=50, render_mode="http", respect_robots=True).model_dump(mode="json"))
 

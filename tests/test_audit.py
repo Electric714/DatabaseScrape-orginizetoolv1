@@ -338,7 +338,7 @@ def test_api_smoke_and_exports(database, monkeypatch):
         assert result.status_code == 201, result.text
         sid = result.json()["id"]
         sources = client.get("/api/sources").json()
-        assert len(sources) == 6
+        assert len(sources) == 8
         assert any(source["name"] == main.OSHA_SOURCE_NAME for source in sources)
         assert any(source["name"] == main.SAM_SOURCE_NAME for source in sources)
         assert any(source["name"] == main.BBB_SOURCE_NAME for source in sources)

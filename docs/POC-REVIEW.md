@@ -53,8 +53,8 @@ APIs: DOL catalog discovery succeeded without credentials; authenticated data re
 | State | Authoritative resource | Acquisition status |
 | --- | --- | --- |
 | MN | [OSP suspension/debarment list](https://mn.gov/admin/osp/government/suspended-debarred/) | Implemented finite HTML list; live retrieval repeated |
-| WI | [WisDOT list](https://wisconsindot.gov/hccidocs/debar.pdf), [DOA procurement](https://doa.wi.gov/Pages/StateEmployees/Procurement.aspx), [contract-compliance ineligible PDF](https://doa.wi.gov/Documents/DEO/WOCCELIIneligible.pdf) | Official resources identified. Separate scopes; PDF acquisition/parsing not implemented |
-| IL | [Labor public-works debarred contractors](https://labor.illinois.gov/laws-rules/conmed/debarred-contractors.html) | Public page identified; not implemented |
+| WI | [WisDOT list](https://wisconsindot.gov/hccidocs/debar.pdf), [DOA procurement](https://doa.wi.gov/Pages/StateEmployees/Procurement.aspx), [contract-compliance ineligible PDF](https://doa.wi.gov/Documents/DEO/WOCCELIIneligible.pdf) | WisDOT targeted PDF collector implemented with exact-name, location and active-date corroboration; live app retrieval still needs a permitted end-to-end run. Other Wisconsin lists remain separate/unimplemented |
+| IL | [Labor public-works debarred contractors](https://labor.illinois.gov/laws-rules/conmed/debarred-contractors.html) | Finite HTML collector implemented; exact active listed names can propose debarment and prevailing-wage flags, with manual approval still required |
 | MO | [OA suspended/debarred vendors](https://purch.oa.mo.gov/media/pdf/suspendeddebarred-vendors) | Official PDF resource identified; not implemented |
 | FL | [DMS suspended vendors](https://www.dms.myflorida.com/business_operations/state_purchasing/state_agency_resources/vendor_registration_and_vendor_lists/suspended_vendor_list), [convicted vendors](https://www.dms.myflorida.com/business_operations/state_purchasing/state_agency_resources/vendor_registration_and_vendor_lists/convicted_vendor_list) | Separate public lists identified; not implemented |
 | OH | Ohio DAS/OFCC debarment lists | Authority identified; current list acquisition remains unresolved |
@@ -72,3 +72,9 @@ Tests: `.venv/bin/pytest -q --ignore=tests/test_browser.py` (or `python -m pytes
 ## Remaining acceptance gates
 
 Supply and validate API credentials, complete a permitted BBB profile/complaint lookup, validate the provisional Violation Tracker parser against real HTML, and obtain repeatable positive identity matches. Add state-specific collectors only as needed. Until those gates pass, this is improved POC code with an honest feasibility report, not a validated legal research service.
+
+## State-source implementation update
+
+Illinois IDOL and Wisconsin WisDOT collectors were added after the initial review. Illinois is parsed as a finite official HTML list and only exact active listed names can produce positive evidence. Because the current Illinois page does not publish location alongside the listed name, the identity basis is explicitly recorded and the finding still requires manual proposal approval. The Illinois source owns both `state_federal_debarment` and `prevailing_wage_violations` because the page explicitly describes the debarment as a Prevailing Wage Act consequence.
+
+Wisconsin WisDOT is an official PDF. The crawler now has a narrow binary-content opt-in: ordinary asset URLs remain blocked, while an adapter may explicitly allow a content type and extension. The WisDOT adapter extracts PDF text and searches only selected master aliases; it requires an exact name plus corroborating city/state or ZIP and an active restriction date before proposing `state_federal_debarment=Y`. Missing, expired, malformed, or location-mismatched entries remain unknown/no-change. This does not make WisDOT a substitute for Wisconsin DOA, DWD, federal SAM, or other jurisdiction-specific lists.

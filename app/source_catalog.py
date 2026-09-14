@@ -19,9 +19,15 @@ SOURCE_CATALOG = [
      "note": "Live HTTP 403. Parser provisional; bulk downloads require subscription. General wage-and-hour findings do not prove prevailing-wage violations."},
     {"key": "dol", "name": "DOL enforcement / open data", "method": "REST API", "status": "Shared with OSHA",
      "fields": [], "hosts": [], "note": "OSHA is queried once. Additional labor datasets require schema and field-semantic verification."},
-    {"key": "state", "name": "State debarment — Minnesota OSP", "method": "Official finite HTML list", "status": "Live list retrieval verified",
+    {"key": "state_mn", "name": "State debarment — Minnesota OSP", "method": "Official finite HTML list", "status": "Live list retrieval verified",
      "fields": ["state_federal_debarment"], "hosts": ["mn.gov"],
      "note": "Checks active dates. Minnesota procurement coverage only; not Minnesota DLI or all-state clearance."},
+    {"key": "state_il", "name": "State debarment — Illinois IDOL public works", "method": "Official finite HTML list", "status": "Collector implemented",
+     "fields": ["state_federal_debarment", "prevailing_wage_violations"], "hosts": ["labor.illinois.gov"],
+     "note": "Positive-only exact listed-name evidence. The official page ties debarment to Prevailing Wage Act violations; absence never clears either field."},
+    {"key": "state_wi", "name": "State debarment — Wisconsin DOT", "method": "Official PDF", "status": "Collector implemented",
+     "fields": ["state_federal_debarment"], "hosts": ["wisconsindot.gov", "www.wisconsindot.gov"],
+     "note": "Positive-only targeted PDF matching with location and active-date corroboration. WisDOT list is not a complete federal/all-agency clearance."},
 ]
 
 

@@ -2,7 +2,7 @@
 
 ## Current proof-of-concept status (2026-09-14)
 
-**Read [the current POC review](docs/POC-REVIEW.md) first.** It supersedes the older implementation notes below. The master CSV is the only contractor list. Select contractors before research; source-owned findings are compared separately. PACER is excluded, OSHA/DOL share one collector, Minnesota OSP is implemented, and Violation Tracker has a provisional HTML adapter. SAM Alpha is test evidence only. BBB/Violation Tracker live access is blocked; API lookups need credentials. Overall retrieval feasibility is not yet proven.
+**Read [the current POC review](docs/POC-REVIEW.md) first.** It supersedes the older implementation notes below. The master CSV is the only contractor list. Select contractors before research; source-owned findings are compared separately. PACER is excluded, OSHA/DOL share one collector, Minnesota OSP is implemented, Illinois IDOL and Wisconsin WisDOT collectors are implemented, and Violation Tracker has a provisional HTML adapter. SAM Alpha is test evidence only. BBB/Violation Tracker live access is blocked; API lookups need credentials. Overall retrieval feasibility is not yet proven.
 
 The review records aggregate validation outcomes and limits without publishing contractor-specific evidence. Research does not add contractors or infer clean results from blocked/partial searches.
 
