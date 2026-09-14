@@ -1,55 +1,36 @@
-"""Temporary structure-only probe for Missouri's official debarment PDF."""
+"""Temporary structure-only probe for Missouri's official vendor report."""
 from __future__ import annotations
-
-import io
-import re
+import io, re
+from collections import Counter
 from urllib.parse import urljoin, urlsplit
-
 import httpx
 from pypdf import PdfReader
 
 MO_PAGE = "https://purch.oa.mo.gov/media/pdf/suspendeddebarred-vendors"
-OH_URLS = [
-    "https://procure.ohio.gov/state-and-local-agencies/resources/08_debarment-csv-list",
-    "https://procure.ohio.gov/bidders-and-suppliers/resources/08_debarment-csv-list",
-]
+DATE = re.compile(r"\d{1,2}\s*/\s*\d{1,2}\s*/\s*\d{4}")
 
-
-def shape(line: str) -> str:
-    value = re.sub(r"[A-Za-z]", "X", line)
-    value = re.sub(r"\d", "9", value)
-    return value[:180]
-
-
-def main() -> None:
-    with httpx.Client(headers={"User-Agent": "ParalegalDatabaseTool-POC-SourceValidation/1.0"}, timeout=30.0, follow_redirects=True, trust_env=False) as client:
-        landing = client.get(MO_PAGE)
-        paths = sorted(set(re.findall(r"(?:https?://[^\"'<>\s]+\.pdf|/[^\"'<>\s]+\.pdf)", landing.text, re.I)))
-        direct = []
-        for raw in paths:
-            candidate = urljoin(str(landing.url), raw)
-            parsed = urlsplit(candidate)
-            if "suspven" in parsed.path.casefold() and parsed.path.casefold().endswith(".pdf"):
-                direct.append(candidate)
-        if len(direct) != 1:
-            raise ValueError("Expected one direct Missouri PDF")
-        response = client.get(direct[0])
-        if not response.content.startswith(b"%PDF"):
-            raise ValueError("Missouri resource is not a PDF")
-        reader = PdfReader(io.BytesIO(response.content), strict=False)
-        pages = [page.extract_text(extraction_mode="layout") or "" for page in reader.pages]
-        lines = [line for line in pages[0].splitlines() if line.strip()]
-        date_re = re.compile(r"\b\d{1,2}/\d{1,2}/\d{2,4}\b")
-        print(f"[MO] pages={len(pages)} first_page_lines={len(lines)}")
-        for index, line in enumerate(lines[:28]):
-            print(f"[MO shape {index:02d}] len={len(line)} dates={len(date_re.findall(line))} gaps={len(re.findall(r' {2,}', line))} :: {shape(line)}")
-        date_lines = [line for page in pages for line in page.splitlines() if date_re.search(line)]
-        print(f"[MO] date_line_shapes={len(date_lines)}")
-        for index, line in enumerate(date_lines[:8]):
-            print(f"[MO date {index:02d}] len={len(line)} gaps={len(re.findall(r' {2,}', line))} :: {shape(line)}")
-        statuses = [client.get(url).status_code for url in OH_URLS]
-        print(f"[OH] documented_url_statuses={statuses}")
-
-
-if __name__ == "__main__":
-    main()
+with httpx.Client(headers={"User-Agent": "ParalegalDatabaseTool-POC-SourceValidation/1.0"}, timeout=30, follow_redirects=True, trust_env=False) as client:
+    landing = client.get(MO_PAGE)
+    paths = set(re.findall(r"(?:https?://[^\"'<>\s]+\.pdf|/[^\"'<>\s]+\.pdf)", landing.text, re.I))
+    urls = []
+    for raw in paths:
+        url = urljoin(str(landing.url), raw)
+        parsed = urlsplit(url)
+        if "suspven" in parsed.path.casefold() and parsed.path.casefold().endswith(".pdf"):
+            urls.append(url)
+    if len(urls) != 1:
+        raise ValueError("Expected one direct report PDF")
+    response = client.get(urls[0])
+    reader = PdfReader(io.BytesIO(response.content), strict=False)
+    lines = [line for page in reader.pages for line in (page.extract_text(extraction_mode="layout") or "").splitlines() if line.strip()]
+    rows = []
+    for line in lines:
+        match = DATE.search(line)
+        if not match:
+            continue
+        parts = [part.strip() for part in re.split(r"\s{2,}", line.strip()) if part.strip()]
+        date_index = next((i for i, part in enumerate(parts) if DATE.search(part)), -1)
+        rows.append((len(parts), date_index, tuple(len(part) for part in parts)))
+    print(f"rows={len(rows)} part_counts={dict(Counter(r[0] for r in rows))} date_indexes={dict(Counter(r[1] for r in rows))}")
+    for index, row in enumerate(rows[:12]):
+        print(f"row{index:02d}: parts={row[0]} date_index={row[1]} lengths={row[2]}")
