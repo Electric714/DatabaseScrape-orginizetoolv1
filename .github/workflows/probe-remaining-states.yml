@@ -1,0 +1,26 @@
+name: Probe remaining state sources
+
+on:
+  push:
+    branches:
+      - poc/state-debarment-fl-mo-oh
+    paths:
+      - scripts/probe_remaining_state_sources.py
+      - .github/workflows/probe-remaining-states.yml
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Probe public official source structures
+        run: python scripts/probe_remaining_state_sources.py
