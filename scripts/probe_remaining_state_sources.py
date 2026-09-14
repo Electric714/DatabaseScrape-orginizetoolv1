@@ -6,7 +6,9 @@ names, addresses, IDs, or contractor data.
 from __future__ import annotations
 
 import io
-from urllib.parse import urljoin
+import re
+from collections import Counter
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 from bs4 import BeautifulSoup
@@ -30,10 +32,26 @@ def html_structure(label: str, response: httpx.Response) -> BeautifulSoup:
     title = soup.title.get_text(" ", strip=True) if soup.title else ""
     tables = soup.find_all("table")
     print(f"[{label}] title={title!r} tables={len(tables)} rows={[len(t.find_all('tr')) for t in tables][:8]}")
-    for index, table in enumerate(tables[:4]):
-        headers = [cell.get_text(" ", strip=True) for cell in table.find_all("th")]
-        print(f"[{label}] table{index}_headers={headers}")
+    classes = Counter()
+    for tag in soup.find_all(True):
+        for value in tag.get("class") or []:
+            classes[value] += 1
+    print(f"[{label}] common_classes={classes.most_common(12)}")
     return soup
+
+
+def describe_static_marker(label: str, soup: BeautifulSoup, needle: str) -> None:
+    node = soup.find(string=lambda value: value and needle.casefold() in value.casefold())
+    if not node:
+        print(f"[{label}] marker={needle!r} found=false")
+        return
+    tag = node.parent
+    parent = tag.parent if tag else None
+    print(
+        f"[{label}] marker={needle!r} found=true tag={getattr(tag, 'name', None)} "
+        f"class={getattr(tag, 'attrs', {}).get('class')} parent={getattr(parent, 'name', None)} "
+        f"parent_class={getattr(parent, 'attrs', {}).get('class')}"
+    )
 
 
 def probe_florida(client: httpx.Client) -> None:
@@ -42,7 +60,20 @@ def probe_florida(client: httpx.Client) -> None:
         summary(label, response)
         soup = html_structure(label, response)
         text = soup.get_text(" ", strip=True).casefold()
-        print(f"[{label}] expected_tokens={{'vendor':{'vendor' in text},'list':{'list' in text},'no_vendors':{'currently no vendors' in text}}}")
+        print(f"[{label}] expected_tokens={{'vendor':{'vendor' in text},'list':{'list' in text},'no_vendors':{'no vendors' in text}}}")
+        for marker in ("Vendor Name/Address", "Agency of Origin", "Effective Date", "Notice of Default", "no vendors"):
+            describe_static_marker(label, soup, marker)
+        notice_links = [a for a in soup.find_all("a", href=True) if "notice of default" in a.get_text(" ", strip=True).casefold()]
+        print(f"[{label}] notice_links={len(notice_links)}")
+        if notice_links:
+            tag = notice_links[0]
+            chain = []
+            for _ in range(5):
+                tag = tag.parent
+                if not tag:
+                    break
+                chain.append((tag.name, tag.get("class")))
+            print(f"[{label}] first_notice_ancestor_chain={chain}")
 
 
 def probe_missouri(client: httpx.Client) -> None:
@@ -53,18 +84,27 @@ def probe_missouri(client: httpx.Client) -> None:
     for anchor in soup.find_all("a", href=True):
         href = urljoin(str(response.url), anchor["href"])
         if ".pdf" in href.casefold():
-            pdf_links.append(href)
+            pdf_links.append((anchor.get_text(" ", strip=True), href))
     print(f"[MO landing] pdf_links={len(pdf_links)}")
-    if not pdf_links:
-        raise SystemExit("Missouri official page exposed no PDF link")
-    pdf = client.get(pdf_links[0])
+    for text, href in pdf_links:
+        print(f"[MO landing] pdf_candidate text={text!r} host={urlsplit(href).hostname} path={urlsplit(href).path}")
+    target = next(((text, href) for text, href in pdf_links if "suspven" in (text + href).casefold() or "suspend" in text.casefold() or "debar" in text.casefold()), None)
+    if not target:
+        raise SystemExit("Missouri official page exposed no targeted suspension/debarment PDF link")
+    _, target_url = target
+    pdf = client.get(target_url)
     summary("MO pdf", pdf)
     if not pdf.content.startswith(b"%PDF"):
         raise SystemExit("Missouri linked resource is not a PDF")
     reader = PdfReader(io.BytesIO(pdf.content), strict=False)
-    texts = [(page.extract_text() or "") for page in reader.pages]
-    text = "\n".join(texts).casefold()
-    print(f"[MO pdf] pages={len(reader.pages)} text_chars={len(text)} tokens={{'suspended':{'suspend' in text},'debarred':{'debar' in text},'effective':{'effective' in text},'vendor':{'vendor' in text}}}")
+    texts = [(page.extract_text(extraction_mode="layout") or "") for page in reader.pages]
+    text = "\n".join(texts)
+    folded = text.casefold()
+    lines = [line for line in text.splitlines() if line.strip()]
+    date_re = re.compile(r"\b\d{1,2}/\d{1,2}/\d{2,4}\b")
+    date_lines = [line for line in lines if date_re.search(line)]
+    multi_date_lines = [line for line in date_lines if len(date_re.findall(line)) >= 2]
+    print(f"[MO pdf] pages={len(reader.pages)} text_chars={len(text)} nonempty_lines={len(lines)} date_lines={len(date_lines)} multi_date_lines={len(multi_date_lines)} tokens={{'suspended':{'suspend' in folded},'debarred':{'debar' in folded},'effective':{'effective' in folded},'vendor':{'vendor' in folded},'reason':{'reason' in folded}}}")
 
 
 def probe_ohio(client: httpx.Client) -> None:
