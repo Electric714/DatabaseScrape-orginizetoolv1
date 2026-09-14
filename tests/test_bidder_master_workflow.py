@@ -48,50 +48,30 @@ def test_csv_parser_preserves_exact_schema_and_leading_zero_zip():
 
 
 async def test_import_compare_apply_and_dismiss_workflow(database, source):
+    await db.update_source(source["id"], {"start_url": "https://apiprod.dol.gov/v4/get/OSHA/inspection/json"})
     imported = await bm.import_rows("old-database.csv", [baseline_row()], [])
     assert imported["rows_inserted"] == 1
-    assert imported["master_total"] == 1
-    master = await bm.search()
-    assert master["items"][0]["zip"] == "01234"
-
+    assert (await bm.search())["items"][0]["zip"] == "01234"
     await db.upsert_record(source["id"], {
-        "external_id": "source-example-1",
-        "company": "Example Builders LLC",
-        "address": "12 Oak Rd",
-        "location": "Madison, WI 01234",
-        "dfi": "Y",
-        "wc": "Y",
-        "osha": "Y",
-        "source_url": "https://fixture.test/example-builders",
+        "external_id": "source-example-1", "company": "Example Builders LLC",
+        "dfi": "Y", "wc": "Y", "osha": "Y", "osha_severe_violations": "2",
+        "source_url": "https://apiprod.dol.gov/v4/get/OSHA/inspection/json",
+        "extra": {"complete_aggregate": True},
     })
     compared = await bm.compare()
-    assert compared["field_changes"] >= 3
-
-    proposals = await bm.list_proposals()
-    by_field = {proposal["field_name"]: proposal for proposal in proposals if proposal["proposal_type"] == "field_update"}
-    assert by_field["dfi"]["old_value"] == "N"
-    assert by_field["dfi"]["new_value"] == "Y"
-    assert by_field["wc"]["new_value"] == "Y"
-    assert by_field["osha"]["new_value"] == "Y"
-
-    await bm.apply(by_field["dfi"]["id"])
+    assert compared["field_changes"] == 2
+    by_field = {p["field_name"]: p for p in await bm.list_proposals()}
+    assert set(by_field) == {"osha", "osha_severe_violations"}
+    await bm.apply(by_field["osha"]["id"])
     after = (await bm.search())["items"][0]
-    assert after["dfi"] == "Y"
-    history = await bm.history(after["_master_id"])
-    assert history[0]["field_name"] == "dfi"
-    assert history[0]["old_value"] == "N"
-    assert history[0]["new_value"] == "Y"
-
-    await bm.dismiss(by_field["wc"]["id"])
+    assert after["osha"] == "Y" and after["dfi"] == "N"
+    assert (await bm.history(after["_master_id"]))[0]["field_name"] == "osha"
+    await bm.dismiss(by_field["osha_severe_violations"]["id"])
     await bm.compare()
-    remaining = await bm.list_proposals()
-    remaining_fields = [p["field_name"] for p in remaining if p["proposal_type"] == "field_update"]
-    assert "dfi" not in remaining_fields
-    assert "wc" not in remaining_fields
-    assert "osha" in remaining_fields
+    assert await bm.list_proposals() == []
 
 
-async def test_new_contractor_becomes_reviewable_then_approved(database, source):
+async def test_research_cannot_add_contractors(database, source):
     await bm.import_rows("old.csv", [baseline_row()], [])
     await db.upsert_record(source["id"], {
         "external_id": "new-source-record",
@@ -102,13 +82,9 @@ async def test_new_contractor_becomes_reviewable_then_approved(database, source)
         "source_url": "https://fixture.test/new",
     })
     result = await bm.compare()
-    assert result["new_contractors"] == 1
-    proposal = next(p for p in await bm.list_proposals() if p["proposal_type"] == "new_record")
-    assert proposal["proposed"]["contractor_name"] == "Brand New Electric LLC"
-    await bm.apply(proposal["id"])
-    search = await bm.search(q="Brand New Electric")
-    assert search["total"] == 1
-    assert search["items"][0]["dfi"] == "Y"
+    assert result["new_contractors"] == 0
+    assert await bm.list_proposals() == []
+    assert (await bm.search(q="Brand New Electric"))["total"] == 0
 
 
 async def test_bidder_import_compare_and_export_api(database, source):

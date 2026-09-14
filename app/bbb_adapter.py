@@ -9,6 +9,7 @@ from urllib.parse import parse_qs, urlencode, urljoin, urlsplit, urlunsplit
 from bs4 import BeautifulSoup
 
 from .bidder_schema import normalize_match_text
+from .identity import location_corroborates
 from .osha_adapter import company_core, contractor_aliases, clean_search_term
 
 BBB_BASE = "https://www.bbb.org"
@@ -383,13 +384,10 @@ class BbbComplaintsAdapter:
     canonical_start_url = BBB_SEARCH_ENDPOINT
     master_fields = BBB_MASTER_FIELDS
 
-    # BBB currently disallows generic query-string crawling in robots.txt while
-    # business profile URLs are allowed. This adapter performs only explicit,
-    # operator-directed company lookups from the imported master list, at low
-    # concurrency, and never attempts to bypass access challenges.
-    ignore_robots = True
+    ignore_robots = False
 
     def __init__(self):
+        self.incomplete_queries = set()
         self.contractors: dict[str, dict] = {}
         self.search_contexts: dict[tuple[str, str], list[str]] = defaultdict(list)
         self.profile_contexts: dict[str, list[str]] = defaultdict(list)
@@ -400,6 +398,7 @@ class BbbComplaintsAdapter:
         self.query_urls: dict[str, list[str]] = defaultdict(list)
 
     def seed_urls(self, master_rows: list[dict]) -> list[str]:
+        self.incomplete_queries.clear()
         self.contractors.clear()
         self.search_contexts.clear()
         self.profile_contexts.clear()
@@ -494,20 +493,7 @@ class BbbComplaintsAdapter:
         }
 
     def _location_accepts(self, candidate: dict, key: str) -> bool:
-        target = self.contractors[key]
-        has_location = any(_string(target.get(field)) for field in ("address_1", "city", "state", "zip"))
-        if not has_location:
-            return True
-        evidence = self._location_evidence(candidate, key)
-        if evidence["zip"]:
-            return True
-        if evidence["city"] and evidence["state"]:
-            return True
-        if evidence["address"] and (evidence["state"] or evidence["city"]):
-            return True
-        if evidence["street_number"] and evidence["city"] and evidence["state"]:
-            return True
-        return False
+        return location_corroborates(candidate, self.contractors[key])
 
     def _remember_candidate(self, candidate: dict, contexts: list[str]) -> bool:
         useful = False
@@ -529,8 +515,6 @@ class BbbComplaintsAdapter:
 
     def _next_search_page(self, soup: BeautifulSoup, url: str) -> str | None:
         page = _search_page(url)
-        if page >= BBB_MAX_SEARCH_PAGES:
-            return None
         numeric_fallback = None
         for anchor in soup.find_all("a", href=True):
             next_url = urljoin(url, anchor["href"])
@@ -579,17 +563,12 @@ class BbbComplaintsAdapter:
                     ):
                         strong_location_candidate = True
 
-            # If page 1 only contains plausible same-name businesses in the wrong
-            # city, keep following BBB's explicit pagination rather than settling
-            # for an ambiguous match. Stop early once an exact name/location
-            # candidate is visible.
-            if not strong_location_candidate:
-                next_url = self._next_search_page(soup, url)
-                if next_url:
-                    sig = (normalize_match_text(_search_term(url)), normalize_match_text(_search_location(url)))
-                    next_sig = (normalize_match_text(_search_term(next_url)), normalize_match_text(_search_location(next_url)))
-                    if next_sig == sig:
-                        self.search_contexts[next_sig] = list(dict.fromkeys([*self.search_contexts.get(next_sig, []), *contexts]))
+            next_url = self._next_search_page(soup, url)
+            if next_url:
+                same_query = (normalize_match_text(_search_term(next_url)), normalize_match_text(_search_location(next_url))) == (normalize_match_text(_search_term(url)), normalize_match_text(_search_location(url)))
+                if not same_query or _search_page(url) >= BBB_MAX_SEARCH_PAGES:
+                    self.incomplete_queries.update(contexts)
+                else:
                     links.append(next_url)
             return list(dict.fromkeys(links))
 
@@ -630,10 +609,9 @@ class BbbComplaintsAdapter:
     def finalize_records(self, complete: bool) -> list[dict]:
         records: list[dict] = []
         for key, contractor in self.contractors.items():
+            contractor_complete = complete and key not in self.incomplete_queries
             profiles = list(self.matched_profiles.get(key, {}).values())
             ambiguous = list(self.ambiguous_profiles.get(key, {}).values())
-            if not profiles and not ambiguous and not complete:
-                continue
 
             summaries = [
                 self.complaint_summaries.get(_profile_base(profile.get("profile_url") or ""), {})
@@ -644,12 +622,7 @@ class BbbComplaintsAdapter:
 
             if positive:
                 complaint_value = "Y"
-            elif profiles and complete and len(parsed) == len(profiles):
-                complaint_value = "N"
-            elif not profiles and not ambiguous and complete:
-                # A completed exact company/location search found no matching BBB
-                # profile or plausible candidate, so BBB has no published complaint
-                # profile we can attribute to this bidder.
+            elif profiles and contractor_complete and not ambiguous and len(parsed) == len(profiles):
                 complaint_value = "N"
             else:
                 complaint_value = ""
@@ -694,6 +667,7 @@ class BbbComplaintsAdapter:
             records.append({
                 "external_id": f"bbb:bidder:{bidder_id or normalize_match_text(contractor_name)}",
                 "company": contractor_name,
+                "bidder_id": bidder_id,
                 "source_url": source_url,
                 "better_business_bureau_complaints": complaint_value,
                 "extra": {
@@ -704,7 +678,9 @@ class BbbComplaintsAdapter:
                     ],
                     "search_terms": contractor.get("_bbb_aliases") or [],
                     "query_count": len(self.query_urls.get(key) or []),
-                    "complete_aggregate": bool(complete),
+                    "complete_aggregate": bool(contractor_complete),
+                    "pagination_incomplete": key in self.incomplete_queries,
+                    "master_id": contractor.get("_master_id"),
                     "matched_profiles": evidence_profiles,
                     "ambiguous_candidates": ambiguous,
                     "narrative": narrative,

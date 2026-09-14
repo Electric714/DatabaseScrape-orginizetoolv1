@@ -101,7 +101,8 @@ def test_sam_exact_active_match_writes_positive_only(monkeypatch):
     record, = adapter.finalize_records(complete=True)
 
     assert record["company"] == "Example Builders LLC"
-    assert record["state_federal_debarment"] == "Y"
+    assert record["state_federal_debarment"] == ""
+    assert record["extra"]["environment"] == "alpha_test"
     assert record["extra"]["federal_component_only"] is True
     assert record["extra"]["negative_result_writes_combined_field"] is False
     assert len(record["extra"]["active_federal_exclusions"]) == 1
@@ -154,7 +155,7 @@ async def test_sam_api_crawl_proposes_only_positive_debarment_and_never_stores_k
     stored = records["items"][0]
     assert "integration-secret-sam-key" not in stored["source_url"]
     projected = bidder_row(stored, fallback_id=False)
-    assert projected["state_federal_debarment"] == "Y"
+    assert projected["state_federal_debarment"] == ""
 
     # Inspect every persisted crawl URL directly. The contractor-level aggregate
     # evidence URL need not be byte-for-byte identical to the canonical page-cache
@@ -170,14 +171,12 @@ async def test_sam_api_crawl_proposes_only_positive_debarment_and_never_stores_k
     assert all("api_key=" not in url.lower() for url in page_urls)
 
     result = await bidder_db.compare()
-    assert result["field_changes"] == 1
+    assert result["field_changes"] == 0
     proposals = [
         proposal for proposal in await bidder_db.list_proposals()
         if proposal["proposal_type"] == "field_update"
     ]
-    assert {proposal["field_name"] for proposal in proposals} == set(SAM_MASTER_FIELDS)
-    assert proposals[0]["old_value"] == "N"
-    assert proposals[0]["new_value"] == "Y"
+    assert proposals == []
 
 
 async def test_builtin_sam_source_is_created_once_and_locked(database):

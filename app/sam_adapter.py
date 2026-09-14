@@ -7,6 +7,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 
 from .bidder_schema import normalize_match_text
 from .config import get_sam_api_key
+from .identity import location_corroborates
 from .osha_adapter import company_core, contractor_aliases, clean_search_term
 
 SAM_ALPHA_API_BASE = "https://api-alpha.sam.gov"
@@ -70,11 +71,13 @@ def _payload(text: str) -> dict:
     if not isinstance(value, dict):
         raise ValueError("SAM.gov Exclusions API returned an unexpected response")
     entities = value.get("excludedEntity")
-    if entities is None:
+    if entities is None and value.get("totalRecords") in (0, "0"):
         entities = []
     if not isinstance(entities, list):
         raise ValueError("SAM.gov Exclusions API response did not contain an excludedEntity list")
-    value["excludedEntity"] = [item for item in entities if isinstance(item, dict)]
+    if any(not isinstance(item, dict) for item in entities):
+        raise ValueError("SAM.gov returned malformed exclusion records")
+    value["excludedEntity"] = entities
     return value
 
 
@@ -276,7 +279,9 @@ class SamExclusionsAdapter:
         return score
 
     def _choose_context(self, entity: dict, contexts: list[str]) -> str | None:
-        exact = [key for key in contexts if self._exact(_entity_name(entity), key)]
+        address = _address(entity)
+        candidate = {"address": address.get("addressLine1"), "city": address.get("city"), "state": address.get("stateOrProvinceCode"), "zip": address.get("zipCode")}
+        exact = [key for key in contexts if self._exact(_entity_name(entity), key) and location_corroborates(candidate, self.contractors[key])]
         if len(exact) == 1:
             return exact[0]
         if len(exact) <= 1:
@@ -326,8 +331,6 @@ class SamExclusionsAdapter:
         for key, contractor in self.contractors.items():
             matches = list(self.matches.get(key, {}).values())
             ambiguous = list(self.ambiguous.get(key, {}).values())
-            if not matches and not ambiguous and not complete:
-                continue
 
             contractor_name = _string(contractor.get("contractor_name"))
             bidder_id = _string(contractor.get("id"))
@@ -341,6 +344,8 @@ class SamExclusionsAdapter:
                     f"SAM.gov returned {len(ambiguous)} similar active firm exclusion result(s) "
                     "that require manual identity review."
                 )
+            elif not complete:
+                narrative = "UNKNOWN / INCOMPLETE: SAM lookup did not finish."
             else:
                 narrative = (
                     "No exact active federal exclusion match was found in the completed SAM.gov "
@@ -350,7 +355,7 @@ class SamExclusionsAdapter:
 
             # SAM proves a positive federal exclusion. It cannot by itself prove the
             # combined state_federal_debarment field is negative.
-            combined_value = "Y" if matches else ""
+            combined_value = ""  # Alpha/test evidence is never a real compliance finding.
             latest = ""
             for match in matches:
                 for action in match.get("actions") or []:
@@ -360,10 +365,13 @@ class SamExclusionsAdapter:
             records.append({
                 "external_id": f"sam:bidder:{bidder_id or normalize_match_text(contractor_name)}",
                 "company": contractor_name,
+                "bidder_id": bidder_id,
                 "date": latest,
                 "source_url": source_url,
                 "state_federal_debarment": combined_value,
                 "extra": {
+                    "master_id": contractor.get("_master_id"),
+                    "environment": "alpha_test",
                     "source_system": "SAM.gov Exclusions API v4 Alpha/test",
                     "api_endpoint": SAM_EXCLUSIONS_ENDPOINT,
                     "api_fields_written_to_master": list(SAM_MASTER_FIELDS),

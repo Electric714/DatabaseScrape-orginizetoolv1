@@ -68,10 +68,12 @@ function updateCollectionButton() {
   $('updateSites').title = available ? 'Collect updated records from ' + available + ' available research sites' : (state.sources.length ? 'All configured sites are already collecting' : 'Set up a research site first');
 }
 async function loadSources() {
-  const [sources, dolStatus, samStatus] = await Promise.all([
+  const [sources, dolStatus, samStatus, catalog, contractors] = await Promise.all([
     api('/api/sources'),
     api('/api/integrations/dol'),
-    api('/api/integrations/sam')
+    api('/api/integrations/sam'),
+    api('/api/source-catalog'),
+    api('/api/bidder/master?limit=1000')
   ]);
   state.sources = sources;
   state.dolStatus = dolStatus;
@@ -80,12 +82,19 @@ async function loadSources() {
   $('oshaApiKeyButton').title = dolStatus.configured ? 'Replace and validate the locally saved DOL API key' : 'Enter and validate the DOL API key required for OSHA collection';
   $('samApiKeyButton').textContent = samStatus.configured ? 'Change SAM test API key' : 'Set SAM test API key';
   $('samApiKeyButton').title = samStatus.configured ? 'Replace and validate the locally saved SAM.gov Alpha API key' : 'Enter and validate the SAM.gov Alpha/test API key required for federal debarment collection';
-  $('sourceCount').textContent = sources.length < 6 ? sources.length + ' / 6' : sources.length + ' configured';
-  $('navSources').textContent = sources.length < 6 ? sources.length + '/6' : sources.length;
-  $('sitesHint').textContent = sources.length < 6 ? (6 - sources.length) + ' site' + (sources.length === 5 ? '' : 's') + ' awaiting setup' : 'Ready for collection and source review';
-  $('siteSetupNote').textContent = sources.length < 6
-    ? 'OSHA/DOL, SAM.gov Federal Debarment, and BBB complaints are built in. Remaining sources can be added as their adapters are finalized.'
-    : 'Collect from each source, then review its saved evidence.';
+  $('sourceCount').textContent = sources.length + ' collectors';
+  $('navSources').textContent = sources.length;
+  $('sitesHint').textContent = '7 source categories · PACER excluded · OSHA/DOL shared';
+  $('siteSetupNote').textContent = 'Select contractors below, then collect from a source. Evidence stays separate from approved master values.';
+  const chooser = $('researchContractors');
+  const selected = new Set(Array.from(chooser.selectedOptions, o => o.value));
+  const contractorSignature = JSON.stringify(contractors.items.map(r => [r._master_id, r.contractor_name]));
+  if (chooser.dataset.signature !== contractorSignature) {
+    chooser.innerHTML = contractors.items.map(r => '<option value="' + r._master_id + '"' + (selected.has(String(r._master_id)) ? ' selected' : '') + '>' + esc(r.contractor_name + ' — ' + r.city + ', ' + r.state) + '</option>').join('');
+    chooser.dataset.signature = contractorSignature;
+    $('researchSelectionNote').textContent = contractors.total > contractors.items.length ? 'Showing the first 1,000 contractors. Select a small test group.' : 'Select a few contractors for the initial proof-of-concept run.';
+  }
+  $('sourceCatalog').innerHTML = '<details><summary>Source coverage, field ownership, and validation status</summary>' + catalog.sources.map(s => '<p><strong>' + esc(s.name) + '</strong> · ' + esc(s.status) + ' · ' + esc(s.method) + '<br>' + esc(s.fields.join(', ') || 'No separate field writes') + '<br>' + esc(s.note) + '</p>').join('') + '</details>';
   updateCollectionButton();
 
   const signature = JSON.stringify({sources, dolConfigured: dolStatus.configured, samConfigured: samStatus.configured});
@@ -110,16 +119,12 @@ async function loadSources() {
       return '<article class="source-row"><div class="source-avatar" aria-hidden="true">' + (index + 1) + '</div><div class="source-info"><h3>SAM.gov Federal Debarment / Exclusions</h3><a class="source-url" href="' + SAM_API_URL + '" target="_blank" rel="noreferrer">' + SAM_API_URL + '</a><div class="source-details"><span class="tag ' + (samStatus.configured ? 'completed' : 'partial') + '">' + keyState + '</span><span>Built-in REST source · Alpha/test v4</span><span>· ' + esc(humanDate(s.last_scan_at)) + '</span></div></div><div class="source-controls"><button class="settings-button" data-sam-key>Set test API key</button><button class="scan-button" data-scan="' + s.id + '"' + (running || !samStatus.configured ? ' disabled' : '') + '>' + (running ? 'Collecting…' : 'Collect federal debarment') + '</button><button class="icon-button" data-full="' + s.id + '" aria-label="Recollect SAM federal debarment API records" title="Recollect SAM Alpha API records, ignoring cached responses"' + (running || !samStatus.configured ? ' disabled' : '') + '>↻</button></div></article>';
     }
     if (isBbb) {
-      return '<article class="source-row"><div class="source-avatar" aria-hidden="true">' + (index + 1) + '</div><div class="source-info"><h3>BBB Business Profiles / Complaints</h3><a class="source-url" href="' + BBB_URL + '" target="_blank" rel="noreferrer">' + BBB_URL + '</a><div class="source-details"><span class="tag completed">Built-in parser</span><span>Targeted company/location matching</span><span>· ' + esc(humanDate(s.last_scan_at)) + '</span></div></div><div class="source-controls"><button class="scan-button" data-scan="' + s.id + '"' + (running ? ' disabled' : '') + '>' + (running ? 'Collecting…' : 'Collect BBB complaints') + '</button><button class="icon-button" data-full="' + s.id + '" aria-label="Recollect BBB complaint records" title="Recollect BBB profiles and complaint summaries, ignoring cached responses"' + (running ? ' disabled' : '') + '>↻</button></div></article>';
+      return '<article class="source-row"><div class="source-avatar" aria-hidden="true">' + (index + 1) + '</div><div class="source-info"><h3>BBB Business Profiles / Complaints</h3><a class="source-url" href="' + BBB_URL + '" target="_blank" rel="noreferrer">' + BBB_URL + '</a><div class="source-details"><span class="tag completed">Parser · ' + esc(s.last_status || 'Not tested locally') + '</span><span>Targeted company/location matching</span><span>· ' + esc(humanDate(s.last_scan_at)) + '</span></div></div><div class="source-controls"><button class="scan-button" data-scan="' + s.id + '"' + (running ? ' disabled' : '') + '>' + (running ? 'Collecting…' : 'Collect BBB complaints') + '</button><button class="icon-button" data-full="' + s.id + '" aria-label="Recollect BBB complaint records" title="Recollect BBB profiles and complaint summaries, ignoring cached responses"' + (running ? ' disabled' : '') + '>↻</button></div></article>';
     }
     return '<article class="source-row"><div class="source-avatar" aria-hidden="true">' + (index + 1) + '</div><div class="source-info"><h3>' + esc(s.name) + '</h3><a class="source-url" href="' + esc(safeUrl(s.start_url)) + '" target="_blank" rel="noreferrer">' + esc(s.start_url) + '</a><div class="source-details"><span class="tag ' + esc(s.last_status || '') + '">' + esc(s.last_status || 'Ready to collect') + '</span><span>' + (s.auto_scan ? 'Every ' + s.interval_minutes + ' min' : 'Manual collection') + '</span><span>· ' + esc(humanDate(s.last_scan_at)) + '</span></div></div><div class="source-controls"><button class="scan-button" data-scan="' + s.id + '"' + (running ? ' disabled' : '') + '>' + (running ? 'Collecting…' : 'Collect records') + '</button><button class="settings-button" data-edit="' + s.id + '">Edit settings</button><button class="icon-button" data-full="' + s.id + '" aria-label="Recollect all pages from ' + esc(s.name) + '" title="Recollect all pages, ignoring cached pages"' + (running ? ' disabled' : '') + '>↻</button><button class="icon-button" data-delete="' + s.id + '" aria-label="Delete ' + esc(s.name) + '" title="Remove research site"' + (running ? ' disabled' : '') + '>×</button></div></article>';
   }).join('');
 
-  const pending = Array.from({length: Math.max(0, 6 - sources.length)}, (_, index) => {
-    const number = sources.length + index + 1;
-    return '<article class="pending-site"><span class="pending-number" aria-hidden="true">' + number + '</span><div><h3>Research site ' + number + '</h3><p>Name and website address pending</p></div><button class="button subtle small" data-open-source="' + number + '">Set up site ' + number + '</button></article>';
-  }).join('');
-  $('sources').innerHTML = (configured ? '<div class="source-list">' + configured + '</div>' : '') + (pending ? '<div class="pending-sites">' + pending + '</div>' : '') + (sources.length >= 6 ? '<div class="additional-source"><button class="text-button" data-open-source>Add another research site</button></div>' : '');
+  $('sources').innerHTML = '<div class="source-list">' + configured + '</div>';
 }
 async function loadStats() {
   const stats = await api('/api/stats');
@@ -471,7 +476,7 @@ async function addSource(event) {
 }
 async function scan(id, full) {
   try {
-    await api('/api/sources/' + id + '/scan', {method:'POST',body:JSON.stringify({force_full:full})});
+    await api('/api/sources/' + id + '/scan', {method:'POST',body:JSON.stringify({force_full:full, master_ids: selectedResearchIds()})});
     notify(full ? 'Full collection queued. Progress will appear in the console.' : 'Collection queued. Records will be saved to your local database.');
     await refreshAll();
   } catch (error) { notify(error.message, true); localEvent('ERROR', 'Could not start scan: ' + error.message); }
@@ -483,12 +488,13 @@ async function updateSites() {
   state.batchUpdating = true;
   updateCollectionButton();
   try {
-    const results = await Promise.allSettled(available.map(s => api('/api/sources/' + s.id + '/scan', {method:'POST', body: JSON.stringify({force_full: false})})));
+    selectedResearchIds();
+    const results = await Promise.allSettled(available.map(s => api('/api/sources/' + s.id + '/scan', {method:'POST', body: JSON.stringify({force_full: false, master_ids: selectedResearchIds()})})));
     const successful = results.filter(r => r.status === 'fulfilled').length;
     results.forEach((result, index) => { if (result.status === 'rejected') localEvent('ERROR', 'Collection could not start for ' + available[index].name + ': ' + result.reason.message); });
     notify(successful + ' site collection' + (successful === 1 ? '' : 's') + ' queued.' + (successful < results.length ? ' Check the console for sites that could not start.' : ' Saved records will update as collection proceeds.'), successful < results.length);
     await refreshAll();
-  } finally {
+  } catch (error) { notify(error.message, true); } finally {
     state.batchUpdating = false;
     updateCollectionButton();
   }
@@ -615,3 +621,20 @@ window.addEventListener('error', e => localEvent('ERROR', 'Browser error: ' + e.
 window.addEventListener('unhandledrejection', e => localEvent('ERROR', 'Browser operation failed: ' + (e.reason?.message || 'Unknown error')));
 async function poll() { await refreshAll(); setTimeout(poll, 2500); }
 poll();
+
+function selectedResearchIds() {
+  const ids = Array.from($('researchContractors').selectedOptions, o => Number(o.value));
+  if (!ids.length) throw new Error('Select at least one contractor in Your research sites before collecting.');
+  if (ids.length > 250) throw new Error('Select at most 250 contractors per proof-of-concept run.');
+  return ids;
+}
+document.addEventListener('click', async event => {
+  const button = event.target.closest('[data-test-api]');
+  if (!button) return;
+  button.disabled = true;
+  try {
+    await api('/api/integrations/' + button.dataset.testApi + '/test', {method: 'POST'});
+    notify('API connection test succeeded.');
+  } catch (error) { notify(error.message, true); }
+  finally { button.disabled = false; }
+});

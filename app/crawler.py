@@ -222,7 +222,8 @@ class BrowserRenderer:
 
 
 class CrawlEngine:
-    def __init__(self, source: dict, job_id: int, force_full: bool = False, *, transport=None):
+    def __init__(self, source: dict, job_id: int, force_full: bool = False, *, transport=None, master_ids=None):
+        self.master_ids = master_ids
         self.source, self.job_id, self.force_full = source, job_id, force_full
         self.source_id = int(source["id"])
         self.start_url = canonicalize_url(source["start_url"])
@@ -276,6 +277,8 @@ class CrawlEngine:
                     await self._load_robots(client)
                 if getattr(self.adapter, "query_mode", False):
                     master_rows = await bidder_master_db.all_rows()
+                    if self.master_ids is not None:
+                        master_rows = [r for r in master_rows if r["_master_id"] in self.master_ids]
                     if not master_rows:
                         raise ValueError("Import the master bidder CSV before running the targeted contractor search")
                     frontier = list(self.adapter.seed_urls(master_rows))
@@ -334,7 +337,7 @@ class CrawlEngine:
                 activity.emit("INFO" if complete else "WARNING", "Scan completed" if complete else "Scan finished with limits or errors",
                               source_id=self.source_id, job_id=self.job_id, pages=self.processed, errors=job["errors"],
                               records_new=job["records_new"], records_updated=job["records_updated"])
-                if complete:
+                if complete and self.master_ids is None:
                     await db.finish_observations(self.source_id, self.job_id)
                 await db.update_job(self.job_id, status="completed" if complete else "partial", finished_at=db.utcnow(),
                     message=f"{self.processed} pages processed. " + ("Crawl boundary exhausted." if complete else "Limits or errors prevented a complete scan; missing records were not marked inactive."))
@@ -415,6 +418,8 @@ class CrawlEngine:
             return
         await db.increment_job(self.job_id, records_found=len(records))
         for record in records:
+            record.setdefault("extra", {})["job_id"] = self.job_id
+            record["extra"]["retrieved_at"] = db.utcnow()
             self._register_record(entity_key(record), record_hash(record))
             outcome = await db.upsert_record(self.source_id, record)
             if outcome in {"new", "updated"}:

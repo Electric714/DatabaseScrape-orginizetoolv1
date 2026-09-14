@@ -12,25 +12,24 @@ def test_live_gui_smoke(database, monkeypatch):
     import uvicorn
     from playwright.sync_api import sync_playwright
     from app import main
-    from fixture_site import DirectorySite
-    class ResearchDirectorySite(DirectorySite):
-        def profile(self, identifier, name, phone):
-            # Synthetic research evidence, never a claim about a real business.
-            owner = "Sample Owner" if identifier == "P1" else "Other Owner"
-            status = "Open" if identifier == "P1" else ""
-            return ("<table><tr><th>Record ID</th><th>Person name</th><th>Business name</th>"
-                    "<th>Owner</th><th>Address</th><th>Location</th><th>OSHA status</th><th>OSHA violations</th></tr>"
-                    f"<tr><td>{identifier}</td><td>{name}</td><td>Example Builders {identifier}</td>"
-                    f"<td>{owner}</td><td>12 Oak Rd</td><td>Madison, WI</td><td>{status}</td>"
-                    "<td>Illustrative fixture only</td></tr></table>")
-    site = ResearchDirectorySite()
+
+    def targeted_site(request):
+        if request.url.path == "/robots.txt":
+            return httpx.Response(200, text="User-agent: *\nAllow: /", headers={"content-type": "text/plain"})
+        if request.url.host == "mn.gov" and request.url.path == "/admin/osp/government/suspended-debarred/":
+            return httpx.Response(200, text='''<div class="search-results">Results 1 - 1 of 1
+                <div class="results"><div class="result-link"><a id="fixture">Example Builders P1</a></div>
+                <table><tr><td>12 Oak Rd</td></tr><tr><td>Madison, WI</td></tr>
+                <tr><td>Debarment Date:</td><td>09/01/2026</td></tr>
+                <tr><td>Debarment End Date:</td><td>09/30/2026</td></tr></table></div></div>''',
+                headers={"content-type": "text/html"})
+        return httpx.Response(404, text="not found")
+
     class FixtureEngine(CrawlEngine):
         def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs, transport=httpx.MockTransport(site))
-    async def public(url):
-        return ["93.184.216.34"]
+            super().__init__(*args, **kwargs, transport=httpx.MockTransport(targeted_site))
+
     monkeypatch.setattr(main, "CrawlEngine", FixtureEngine)
-    monkeypatch.setattr(main, "validate_public_url", public)
     monkeypatch.setattr(main, "dol_api_key_configured", lambda: False)
     monkeypatch.setattr(main, "sam_api_key_configured", lambda: False)
     listener = socket.socket()
@@ -71,6 +70,7 @@ def test_live_gui_smoke(database, monkeypatch):
                 expect(page.get_by_role("button", name="Collect federal debarment", exact=True)).to_be_disabled()
                 expect(page.get_by_role("heading", name="BBB Business Profiles / Complaints")).to_be_visible()
                 expect(page.get_by_role("button", name="Collect BBB complaints", exact=True)).to_be_enabled()
+                expect(page.get_by_role("heading", name="Minnesota OSP debarment")).to_be_visible()
                 page.locator("#samApiKeyButton").click()
                 expect(page.locator("#samKeyDialog")).to_be_visible()
                 expect(page.locator("#saveSamKey")).to_be_visible()
@@ -92,18 +92,11 @@ def test_live_gui_smoke(database, monkeypatch):
                 assert table_layout["scrollWidth"] > table_layout["clientWidth"] * 2
                 assert table_layout["firstWidth"] >= 80
                 assert table_layout["secondWidth"] >= 240
-                page.locator("[data-open-source]").first.click()
-                page.locator("#sourceName").fill("GUI fixture")
-                page.locator("#sourceUrl").fill("https://fixture.test/")
-                page.locator("summary").click()
-                page.locator("#renderMode").select_option("http")
-                page.locator("#delayMs").fill("0")
-                page.get_by_role("button", name="Save research site", exact=True).click()
-                page.get_by_role("button", name="Collect records", exact=True).wait_for()
+
                 import csv, io
                 baseline_one = {column: "" for column in BIDDER_COLUMNS}
                 baseline_one.update({"id":"P1","contractor_name":"Example Builders P1","address_1":"12 Oak Rd",
-                                     "city":"Madison","state":"WI","osha":"N"})
+                                     "city":"Madison","state":"WI","state_federal_debarment":"N"})
                 baseline_two = {column: "" for column in BIDDER_COLUMNS}
                 baseline_two.update({"id":"P2","contractor_name":"Example Builders P2","address_1":"12 Oak Rd",
                                      "city":"Madison","state":"WI"})
@@ -117,6 +110,9 @@ def test_live_gui_smoke(database, monkeypatch):
                 expect(page.locator("#masterCount")).to_have_text("2", timeout=10000)
                 expect(page.locator("#uploadCsvButton")).to_have_text("Import another CSV", timeout=10000)
                 expect(page.locator("#records")).to_contain_text("Example Builders P1", timeout=10000)
+                expect(page.locator("#researchContractors option")).to_have_count(2, timeout=10000)
+                contractor_values = page.locator("#researchContractors option").evaluate_all("options => options.map(option => option.value)")
+                page.locator("#researchContractors").select_option(contractor_values)
                 sticky_positions = page.evaluate("""() => {
                     const wrap = document.querySelector('.bidder-table-wrap');
                     wrap.scrollLeft = wrap.scrollWidth;
@@ -135,10 +131,11 @@ def test_live_gui_smoke(database, monkeypatch):
                 assert sticky_positions["firstBg"] != "rgba(0, 0, 0, 0)"
                 assert sticky_positions["secondBg"] != "rgba(0, 0, 0, 0)"
 
-                page.get_by_role("button", name="Collect records", exact=True).click()
+                mn_row = page.locator(".source-row").filter(has_text="Minnesota OSP debarment")
+                mn_row.get_by_role("button", name="Collect records", exact=True).click()
                 expect(page.locator("#sourceRecordCount")).to_have_text("2", timeout=15000)
                 page.locator("#compareButton").click()
-                expect(page.locator("#proposals")).to_contain_text("osha", timeout=10000)
+                expect(page.locator("#proposals")).to_contain_text("state_federal_debarment", timeout=10000)
                 expect(page.locator("#proposals")).to_contain_text("N")
                 expect(page.locator("#proposals")).to_contain_text("Y")
                 page.locator("[data-apply-proposal]").first.click()

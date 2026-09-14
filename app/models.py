@@ -32,3 +32,4 @@ class SourceUpdate(BaseModel):
 
 class ScanOptions(BaseModel):
     force_full: bool = False
+    master_ids: list[int] | None = Field(default=None, max_length=250)

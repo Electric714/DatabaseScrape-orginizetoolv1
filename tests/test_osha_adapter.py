@@ -212,7 +212,7 @@ def test_negative_osha_result_requires_complete_api_run(monkeypatch):
     adapter = OshaEstablishmentAdapter()
     adapter.seed_urls([bidder()])
 
-    assert adapter.finalize_records(complete=False) == []
+    assert adapter.finalize_records(complete=False)[0]["osha"] == ""
 
     record, = adapter.finalize_records(complete=True)
     assert record["osha"] == "N"

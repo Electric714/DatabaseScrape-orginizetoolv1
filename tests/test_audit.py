@@ -167,6 +167,7 @@ async def test_sitemap_direct_children_only_and_encoding(source):
 
 
 async def test_scan_launch_is_serialized(source, monkeypatch):
+    await db.update_source(source["id"], {"start_url": "https://www.bbb.org/search"})
     entered = asyncio.Event()
     release = asyncio.Event()
     class SlowEngine:
@@ -337,7 +338,7 @@ def test_api_smoke_and_exports(database, monkeypatch):
         assert result.status_code == 201, result.text
         sid = result.json()["id"]
         sources = client.get("/api/sources").json()
-        assert len(sources) == 4
+        assert len(sources) == 6
         assert any(source["name"] == main.OSHA_SOURCE_NAME for source in sources)
         assert any(source["name"] == main.SAM_SOURCE_NAME for source in sources)
         assert any(source["name"] == main.BBB_SOURCE_NAME for source in sources)
@@ -345,7 +346,13 @@ def test_api_smoke_and_exports(database, monkeypatch):
         assert client.post("/api/sources", json={"name": "Duplicate", "start_url": "https://fixture.test/"}).status_code == 409
         for version in (1, 2):
             site.version = version
-            job = client.post(f"/api/sources/{sid}/scan", json={}).json()
+            assert client.post(f"/api/sources/{sid}/scan", json={}).status_code == 422
+            async def run_fixture():
+                fixture_source = await db.get_source(sid)
+                jid = await db.create_job(sid, False)
+                await FixtureEngine(fixture_source, jid).run()
+                return await db.get_job(jid)
+            job = client.portal.call(run_fixture)
             import time
             for _ in range(200):
                 status = client.get(f"/api/jobs/{job['id']}").json()

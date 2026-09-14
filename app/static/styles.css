@@ -171,3 +171,5 @@ main{margin-left:214px;padding:0 40px;max-width:1920px}.topbar{height:91px;displ
 }
 
 .source-heading-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end}.source-heading-actions .button{white-space:nowrap}@media(max-width:720px){.source-heading-actions{width:100%;justify-content:flex-start}}
+
+.research-selection {display:grid;gap:8px;margin:16px 0}.research-selection select {width:100%;min-height:130px;padding:8px} #sourceCatalog {margin:16px 0} #sourceCatalog p {line-height:1.6}

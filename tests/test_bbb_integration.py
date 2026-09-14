@@ -276,17 +276,17 @@ def test_exact_profile_with_zero_published_complaints_is_negative():
     assert record["extra"]["matched_profiles"][0]["total_complaints_3y"] == 0
 
 
-def test_completed_search_with_no_profile_is_negative_but_partial_run_is_unknown():
+def test_no_profile_and_partial_run_are_unknown():
     adapter = BbbComplaintsAdapter()
     search_url = adapter.seed_urls([bidder_tuple_to_row(EXAMPLE_BIDDERS[3])])[0]
     adapter.links("<html><body><h1>No matching businesses</h1></body></html>", search_url)
 
     complete_record, = adapter.finalize_records(complete=True)
-    assert complete_record["better_business_bureau_complaints"] == "N"
+    assert complete_record["better_business_bureau_complaints"] == ""
 
     adapter = BbbComplaintsAdapter()
     adapter.seed_urls([bidder_tuple_to_row(EXAMPLE_BIDDERS[3])])
-    assert adapter.finalize_records(complete=False) == []
+    assert adapter.finalize_records(complete=False)[0]["better_business_bureau_complaints"] == ""
 
 
 def test_unrecognized_200_search_page_fails_closed_instead_of_false_negative():
@@ -407,11 +407,11 @@ async def test_builtin_bbb_source_is_created_once_reuses_legacy_and_is_locked(da
     assert first["id"] == legacy["id"] == second["id"]
     assert first["name"] == main.BBB_SOURCE_NAME
     assert first["start_url"] == BBB_SEARCH_ENDPOINT
-    assert first["max_depth"] == 2
+    assert first["max_depth"] == 5
     assert first["concurrency"] == 1
     assert first["delay_ms"] == 1500
     assert first["render_mode"] == "auto"
-    assert not bool(first["respect_robots"])
+    assert bool(first["respect_robots"])
     assert len([source for source in sources if main._is_bbb_source(source)]) == 1
 
     try:

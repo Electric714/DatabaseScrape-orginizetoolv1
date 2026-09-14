@@ -255,4 +255,4 @@ def parse_bidder_csv(data: bytes) -> tuple[list[dict[str, str]], list[str]]:
 def clean_csv_cell(value: Any) -> str:
     if value is None:
         return ""
-    return str(value).replace("\x00", "").strip()
+    return str(value).replace("\x00", "")

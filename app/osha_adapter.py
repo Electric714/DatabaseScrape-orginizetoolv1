@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime, timezone
 from collections import defaultdict
 from difflib import SequenceMatcher
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 from .bidder_schema import normalize_match_text
 from .config import get_dol_api_key
+from .identity import location_corroborates
 
 DOL_API_BASE = "https://apiprod.dol.gov"
 DOL_INSPECTION_PATH = "/v4/get/OSHA/inspection/json"
@@ -183,8 +185,9 @@ def _rows(text: str) -> list[dict]:
         raise ValueError("DOL API response did not contain a data array")
     rows = []
     for item in payload["data"]:
-        if isinstance(item, dict):
-            rows.append({str(key).lower(): value for key, value in item.items()})
+        if not isinstance(item, dict):
+            raise ValueError("DOL API returned a malformed data row")
+        rows.append({str(key).lower(): value for key, value in item.items()})
     return rows
 
 
@@ -336,6 +339,7 @@ class OshaEstablishmentAdapter:
         matches = [
             key for key in contexts
             if self._candidate_matches(_string(row.get("estab_name")), key)
+            and location_corroborates({"address": row.get("site_address"), "city": row.get("site_city"), "state": row.get("site_state"), "zip": row.get("site_zip")}, self.contractors[key])
         ]
         if len(matches) == 1:
             return matches[0]
@@ -455,9 +459,6 @@ class OshaEstablishmentAdapter:
             ambiguous = list(self.ambiguous_candidates.get(key, {}).values())
             violations = list(self.violations.get(key, {}).values())
 
-            if not inspections and not complete:
-                # A partial API run cannot prove that OSHA has no matching record.
-                continue
 
             severe = [row for row in violations if not _is_deleted(row) and _is_severe(row)]
             severe_years = set()
@@ -473,9 +474,9 @@ class OshaEstablishmentAdapter:
             latest_date = inspections[-1].get("open_date", "") if inspections else ""
             bidder_id = _string(contractor.get("id"))
             contractor_name = _string(contractor.get("contractor_name"))
-            osha_value = "Y" if inspections else ("" if ambiguous else "N")
-            severe_value = str(len(severe)) if complete and inspections else ""
-            years_value = ", ".join(sorted(severe_years, key=int)) if complete and inspections else ""
+            osha_value = "Y" if inspections else ("" if ambiguous or not complete else "N")
+            severe_value = str(len(severe)) if complete and inspections and not ambiguous else ""
+            years_value = ", ".join(sorted(severe_years, key=int)) if complete and inspections and not ambiguous else ""
 
             if inspections:
                 narrative = (
@@ -494,6 +495,8 @@ class OshaEstablishmentAdapter:
                     "DOL OSHA enforcement API returned similar establishment names that require "
                     "manual identity review before assigning Y/N: " + names
                 )
+            elif not complete:
+                narrative = "UNKNOWN / INCOMPLETE: DOL lookup did not finish."
             else:
                 narrative = (
                     "No exact-name or plausible similar-name OSHA inspection match was found "
@@ -504,6 +507,7 @@ class OshaEstablishmentAdapter:
             records.append({
                 "external_id": f"osha:bidder:{bidder_id or normalize_match_text(contractor_name)}",
                 "company": contractor_name,
+                "bidder_id": bidder_id,
                 "date": latest_date,
                 "source_url": source_url,
                 "osha": osha_value,
@@ -511,6 +515,8 @@ class OshaEstablishmentAdapter:
                 "years": years_value,
                 "osha_details": narrative,
                 "extra": {
+                    "master_id": contractor.get("_master_id"),
+                    "retrieved_at": datetime.now(timezone.utc).isoformat(),
                     "source_system": "DOL Open Data API / OSHA enforcement",
                     "api_base": DOL_API_BASE,
                     "api_fields_written_to_master": list(OSHA_MASTER_FIELDS),
