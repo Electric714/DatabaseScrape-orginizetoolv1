@@ -387,9 +387,16 @@ class CrawlEngine:
             return json.loads(cached.get("discovered_links") or "[]")
         if result.status >= 400:
             raise ValueError(f"HTTP {result.status}")
+        decoder = getattr(self.adapter, "decode_body", None)
+        if decoder:
+            decoded = decoder(result.body, result.headers, result.url)
+            if not isinstance(decoded, str):
+                raise ValueError("Source adapter body decoder must return text")
+            result.text = decoded
         if CHALLENGE.search(result.text):
             raise ValueError("Explicit access challenge detected; no rendering attempted")
-        digest = hashlib.sha256(result.text.encode()).hexdigest()
+        digest_source = result.body if decoder else result.text.encode()
+        digest = hashlib.sha256(digest_source).hexdigest()
         if cached and cached.get("content_hash") == digest and not self.force_full and not getattr(self.adapter, "always_parse", False):
             await self._touch_cached(url)
             links = json.loads(cached.get("discovered_links") or "[]")
@@ -465,6 +472,8 @@ class CrawlEngine:
             result.not_modified = True
             activity.emit("INFO", "Unchanged page; reusing saved links and sightings", job_id=self.job_id, url=url)
             return result
+        if getattr(self.adapter, "decode_body", None):
+            return result
         if result.status == 200 and not CHALLENGE.search(result.text) and (
             self.render_mode == "browser" or self.render_mode == "auto" and self._looks_dynamic(result.text)
         ):
@@ -484,7 +493,12 @@ class CrawlEngine:
         if not url:
             return False
         parts = urlsplit(url)
-        return parts.hostname == self.start_host and parts.port in {None, 80, 443} and not any(parts.path.lower().endswith(ext) for ext in ASSET_EXTENSIONS) and self.adapter.allowed_url(url)
+        path = parts.path.lower()
+        blocked_asset = any(path.endswith(ext) for ext in ASSET_EXTENSIONS)
+        allowed_assets = tuple(str(ext).lower() for ext in getattr(self.adapter, "allowed_asset_extensions", ()))
+        if blocked_asset and not any(path.endswith(ext) for ext in allowed_assets):
+            return False
+        return parts.hostname == self.start_host and parts.port in {None, 80, 443} and self.adapter.allowed_url(url)
 
     def _check_request(self, url, robots=True):
         value = canonicalize_url(url)
@@ -549,7 +563,10 @@ class CrawlEngine:
                 continue
             if result.status < 300 and result.status != 204:
                 kind = result.headers.get("content-type", "").lower()
-                if kind and not any(x in kind for x in ("text/", "html", "xml", "json", "javascript")):
+                accepted = tuple(str(value).lower() for value in getattr(self.adapter, "accepted_content_types", ()))
+                normal = any(x in kind for x in ("text/", "html", "xml", "json", "javascript"))
+                adapter_ok = any(value in kind for value in accepted)
+                if kind and not normal and not adapter_ok:
                     raise ValueError("Unsupported response content type")
             return result
         raise ValueError("Too many redirects")

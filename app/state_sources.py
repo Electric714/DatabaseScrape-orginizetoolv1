@@ -246,6 +246,7 @@ class WisconsinDebarmentAdapter:
     canonical_start_url = WI_URL
     master_fields = ("state_federal_debarment",)
     accepted_content_types = ("application/pdf",)
+    allowed_asset_extensions = (".pdf",)
 
     def seed_urls(self, master_rows):
         self.contractors = master_rows
