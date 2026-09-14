@@ -131,4 +131,11 @@ replace_once(
     "PACER is excluded, OSHA/DOL share one collector, Minnesota OSP is implemented, Illinois IDOL and Wisconsin WisDOT collectors are implemented, and Violation Tracker has a provisional HTML adapter.",
 )
 
+# The API smoke test intentionally counts every built-in collector plus its one fixture source.
+replace_once(
+    "tests/test_audit.py",
+    "        assert len(sources) == 6\n",
+    "        assert len(sources) == 8\n",
+)
+
 print("State-source patch applied successfully")
