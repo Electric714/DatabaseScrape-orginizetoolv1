@@ -109,7 +109,9 @@ The current acquisition path is:
 
 The published sitemap index is `https://www.bbb.org/sitemap-business-profiles-index.xml`. A one-time live structure probe on 2026-09-15 confirmed 575 child business-profile sitemaps with HTTP range support and strong geographic clustering. The POC maps the six states represented in the supplied bidder database (FL, IL, MN, MO, OH, WI) to their verified sitemap clusters and includes one neighboring sitemap on each boundary. No `/search` URL is generated or allowed by the BBB adapter.
 
-Sitemap URLs are only discovery hints. A URL slug is never enough to update the database: the collector opens a plausible profile and requires exact normalized business identity plus location corroboration from the actual profile. Only then does it read the direct `/complaints` page.
+Sitemap index/child XML stays on ordinary HTTP. Sitemap URLs are only discovery hints: a URL slug is never enough to update the database. For an already-discovered profile or `/complaints` document, the local application may use Chromium's normal document navigation, while still enforcing robots policy and the adapter's exact BBB profile boundary. It does not solve CAPTCHAs or bypass an explicit challenge; a 401/403/429 or challenge remains an incomplete run.
+
+The collector opens a plausible profile and requires exact normalized business identity plus location corroboration from the actual profile. Only then does it read the direct `/complaints` page.
 
 BBB is authoritative for exactly one master field:
 
@@ -121,7 +123,7 @@ The field semantics are:
 - `N` — an exact matched BBB profile was successfully reached and reports zero complaints in the three-year summary.
 - blank — no exact profile was found, the selected state is not mapped by this POC, identity is ambiguous, the complaint summary could not be parsed reliably, or any sitemap/profile/complaint request was blocked or incomplete.
 
-A missing sitemap match is deliberately **not** treated as zero complaints. A 401/403/429 or explicit access challenge also leaves the result unknown. Consumer complaint narratives are not retained; only the summary counts and limited date/type/status metadata needed for review are kept.
+A missing sitemap match is deliberately **not** treated as zero complaints. Consumer complaint narratives are not retained; only the summary counts and limited date/type/status metadata needed for review are kept.
 
 ## Query-focused source integrations
 Three website positions are still **pending**. Source 1 is OSHA/DOL, Source 2 is SAM.gov Federal Debarment, and Source 3 is the BBB complaint parser.

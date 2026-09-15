@@ -159,7 +159,8 @@ class BrowserRenderer:
                         if request.method != "GET":
                             raise ValueError("Direct browser non-GET request blocked")
                         value = canonicalize_url(request.url)
-                        self.engine._check_request(value, robots=False)
+                        browser_robots = bool(getattr(self.engine.adapter, "browser_respect_robots", False))
+                        self.engine._check_request(value, robots=browser_robots)
                         allowed = getattr(self.engine.adapter, "browser_allowed_url", self.engine.adapter.allowed_url)
                         if not allowed(value):
                             raise ValueError("Direct browser navigation outside adapter boundary")
@@ -451,7 +452,11 @@ class CrawlEngine:
         await db.increment_job(self.job_id, records_found=len(observations))
 
     async def _fetch(self, client, url, cached):
-        if getattr(self.adapter, "direct_browser", False) and self.transport is None:
+        browser_fetch_url = getattr(self.adapter, "browser_fetch_url", None)
+        use_direct_browser = bool(getattr(self.adapter, "direct_browser", False)) or bool(
+            browser_fetch_url and browser_fetch_url(url)
+        )
+        if use_direct_browser and self.transport is None:
             activity.emit(
                 "INFO", "Fetching source page in Chromium session",
                 source_id=self.source_id, job_id=self.job_id, url=url,
