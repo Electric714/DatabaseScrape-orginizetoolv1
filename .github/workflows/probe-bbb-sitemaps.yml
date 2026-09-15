@@ -53,3 +53,5 @@ jobs:
                       shape[sanitized] += 1
               print("STATE_COUNTS", states.most_common(10))
               print("PATH_SHAPES", shape.most_common(5))
+
+          print("PROBE_COMPLETE")
