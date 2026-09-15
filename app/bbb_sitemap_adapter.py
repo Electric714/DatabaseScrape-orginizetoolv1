@@ -83,12 +83,11 @@ def _core_sitemap_numbers(state: str) -> set[int]:
 class BbbSitemapComplaintsAdapter(BbbComplaintsAdapter):
     """Discover BBB profiles from BBB's published profile sitemaps, never /search.
 
-    The profile and complaint parsers remain the conservative implementation from
-    BbbComplaintsAdapter. This class changes only acquisition/discovery: it starts
-    from BBB's robots-advertised business-profile sitemap index, narrows to the
-    POC states represented in the imported bidder CSV, filters profile URLs by
-    plausible contractor-name slug plus state, then verifies identity and location
-    on the actual BBB profile before following its /complaints page.
+    Sitemap XML is fetched as ordinary HTTP. Only a profile/complaints document
+    discovered from those sitemaps may use Chromium's normal document navigation
+    on a real local run. This is not a challenge bypass: robots policy and the
+    same strict adapter URL boundary still apply, and any challenge/403 fails
+    closed as unknown.
     """
 
     canonical_start_url = BBB_SITEMAP_INDEX
@@ -96,6 +95,7 @@ class BbbSitemapComplaintsAdapter(BbbComplaintsAdapter):
     always_parse = True
     fail_fast_access_errors = True
     ignore_robots = False
+    browser_respect_robots = True
 
     def __init__(self):
         super().__init__()
@@ -105,8 +105,8 @@ class BbbSitemapComplaintsAdapter(BbbComplaintsAdapter):
         self.unsupported_states: set[str] = set()
 
     def seed_urls(self, master_rows: list[dict]) -> list[str]:
-        # Reuse the mature bidder/alias normalization setup, then discard the
-        # legacy /search query plan. No /search URL is returned or requested.
+        # Reuse mature bidder/alias normalization, then discard the legacy
+        # /search query plan. No /search URL is returned or requested.
         super().seed_urls(master_rows)
         self.search_contexts.clear()
         self.query_urls.clear()
@@ -121,12 +121,23 @@ class BbbSitemapComplaintsAdapter(BbbComplaintsAdapter):
                 if key not in self.state_contexts[state]:
                     self.state_contexts[state].append(key)
             else:
-                # Unsupported/unmapped states remain unknown rather than clean.
                 self.incomplete_queries.add(key)
                 if state:
                     self.unsupported_states.add(state)
 
         return [BBB_SITEMAP_INDEX] if self.contractors else []
+
+    def browser_fetch_url(self, url: str) -> bool:
+        """Only actual profile documents use a normal Chromium navigation."""
+        return _is_profile_url(url) or _is_complaints_url(url)
+
+    def browser_allowed_url(self, url: str) -> bool:
+        parts = urlsplit(url)
+        return (
+            (parts.hostname or "").lower() == "www.bbb.org"
+            and not parts.query
+            and self.browser_fetch_url(url)
+        )
 
     def allowed_url(self, url: str) -> bool:
         parts = urlsplit(url)
@@ -136,7 +147,7 @@ class BbbSitemapComplaintsAdapter(BbbComplaintsAdapter):
             return True
         if _SITEMAP_CHILD_PATH.match(parts.path):
             return url in self.selected_sitemaps
-        return _is_profile_url(url) or _is_complaints_url(url)
+        return self.browser_fetch_url(url)
 
     def _index_links(self, text: str) -> list[str]:
         index_by_number: dict[int, str] = {}
@@ -224,6 +235,7 @@ class BbbSitemapComplaintsAdapter(BbbComplaintsAdapter):
                 record["source_url"] = BBB_SITEMAP_INDEX
             extra = record.setdefault("extra", {})
             extra["discovery_method"] = "BBB-published business-profile sitemap index"
+            extra["profile_fetch_method"] = "local Chromium document navigation"
             extra["sitemap_blocks_considered"] = extra.pop("query_count", 0)
             extra["supported_sitemap_states"] = sorted(BBB_STATE_SITEMAP_RANGES)
             extra["unsupported_selected_states"] = sorted(self.unsupported_states)
