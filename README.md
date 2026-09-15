@@ -79,15 +79,15 @@ Because this is a documented REST API integration, the application does not navi
 
 ## SAM.gov Federal Debarment / Exclusions API — Source 2
 
-SAM.gov Federal Debarment is also a built-in integration. For the current proof-of-concept the application is pinned to the official **v4 Alpha/test Exclusions API** documented by GSA:
+SAM.gov Federal Debarment is a built-in integration using the official **v4 production Exclusions API** documented by GSA:
 
-- Alpha/test endpoint: `https://api-alpha.sam.gov/entity-information/v4/exclusions`
-- Production endpoint reserved for promotion later: `https://api.sam.gov/entity-information/v4/exclusions`
+- Production endpoint: `https://api.sam.gov/entity-information/v4/exclusions`
+- Alpha endpoint remains documented by GSA for pre-production testing: `https://api-alpha.sam.gov/entity-information/v4/exclusions`
 - API documentation: `https://open.gsa.gov/api/exclusions-api/`
 
 The adapter submits targeted `classification=Firm`, `recordStatus=Active`, and `exclusionName` queries for each approved contractor and related company. It performs conservative normalized company-name matching and uses the bidder address/state/city/ZIP only for disambiguation when necessary.
 
-SAM requires an API key as the `api_key` query parameter. The built-in SAM card has a **Set SAM test API key** control; the app validates the key against the official Alpha endpoint before saving it to `.runtime/sam_api_key.txt`. `SAM_API_KEY` may also be supplied as an environment variable.
+SAM requires an API key as the `api_key` query parameter. The built-in SAM card has a **Set SAM API key** control; the app validates the key against the official production endpoint before saving it to `.runtime/sam_api_key.txt`. `SAM_API_KEY` may also be supplied as an environment variable.
 
 Because SAM requires the credential in the query string, the crawler uses a credential-injection hook: stored source URLs, page-cache URLs, record evidence, activity events, diagnostics, and bidder exports contain the credential-free logical URL. The API key is added only to the outbound network request.
 
@@ -97,7 +97,7 @@ SAM is authoritative only for the **federal positive component** of `state_feder
 - a clean SAM search does **not** propose `N`, because the same combined field can still be positive due to a state debarment source;
 - similar names remain evidence for manual identity review and do not update the master automatically.
 
-The Alpha endpoint is for testing. GSA documents separate Alpha access/account steps and rate limits; production promotion should happen only after the adapter has been validated with the law firm's examples.
+The production endpoint is used for live public exclusion checks. Exact active federal matches may propose `Y`; absence never clears the combined state/federal field.
 
 ## BBB Business Profiles / Complaints — Source 3
 

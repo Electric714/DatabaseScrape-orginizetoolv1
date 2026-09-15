@@ -59,7 +59,7 @@ class SamApiKeyPayload(BaseModel):
 
 OSHA_SOURCE_NAME = "OSHA / DOL Enforcement API"
 OSHA_SOURCE_HOSTS = {"www.osha.gov", "apiprod.dol.gov", "api.dol.gov"}
-SAM_SOURCE_NAME = "SAM.gov Federal Debarment / Exclusions (Alpha Test API)"
+SAM_SOURCE_NAME = "SAM.gov Federal Debarment / Exclusions"
 SAM_SOURCE_HOSTS = {"sam.gov", "www.sam.gov", "api.sam.gov", "api-alpha.sam.gov"}
 BBB_SOURCE_NAME = "BBB Business Profiles / Complaints"
 BBB_SOURCE_HOSTS = {"bbb.org", "www.bbb.org"}
@@ -221,13 +221,13 @@ async def validate_sam_api_key(api_key: str) -> None:
                 headers={"Accept": "application/json"},
             )
     except (httpx.TimeoutException, httpx.NetworkError) as exc:
-        raise ValueError("Could not reach the SAM.gov Alpha Exclusions API to test this key") from exc
+        raise ValueError("Could not reach the SAM.gov Exclusions API to test this key") from exc
     if response.status_code in {401, 403}:
-        raise ValueError("SAM.gov Alpha rejected this API key")
+        raise ValueError("SAM.gov rejected this API key")
     if response.status_code == 429:
-        raise ValueError("SAM.gov Alpha rate limit reached; try the key again after the limit resets")
+        raise ValueError("SAM.gov rate limit reached; try the key again after the limit resets")
     if response.status_code < 200 or response.status_code >= 300:
-        raise ValueError(f"SAM.gov Alpha API key test failed with HTTP {response.status_code}")
+        raise ValueError(f"SAM.gov API key test failed with HTTP {response.status_code}")
     parse_sam_payload(response.text)
 
 
@@ -415,7 +415,7 @@ async def sam_integration_status():
         "source_id": source["id"],
         "source_name": SAM_SOURCE_NAME,
         "endpoint": SAM_EXCLUSIONS_ENDPOINT,
-        "environment": "alpha",
+        "environment": "production",
         "documentation_url": "https://open.gsa.gov/api/exclusions-api/",
         "api_key_url": "https://sam.gov/profile/details",
     }
@@ -429,8 +429,8 @@ async def configure_sam_integration(payload: SamApiKeyPayload):
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     source = await ensure_builtin_sam_source()
-    activity.emit("INFO", "SAM.gov Alpha Exclusions API key tested and saved", source_id=source["id"])
-    return {"configured": True, "validated": True, "source_id": source["id"], "environment": "alpha"}
+    activity.emit("INFO", "SAM.gov production Exclusions API key tested and saved", source_id=source["id"])
+    return {"configured": True, "validated": True, "source_id": source["id"], "environment": "production"}
 
 
 @app.get("/api/sources")

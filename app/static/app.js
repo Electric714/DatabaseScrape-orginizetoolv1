@@ -80,8 +80,8 @@ async function loadSources() {
   state.samStatus = samStatus;
   $('oshaApiKeyButton').textContent = dolStatus.configured ? 'Change OSHA API key' : 'Set OSHA API key';
   $('oshaApiKeyButton').title = dolStatus.configured ? 'Replace and validate the locally saved DOL API key' : 'Enter and validate the DOL API key required for OSHA collection';
-  $('samApiKeyButton').textContent = samStatus.configured ? 'Change SAM test API key' : 'Set SAM test API key';
-  $('samApiKeyButton').title = samStatus.configured ? 'Replace and validate the locally saved SAM.gov Alpha API key' : 'Enter and validate the SAM.gov Alpha/test API key required for federal debarment collection';
+  $('samApiKeyButton').textContent = samStatus.configured ? 'Change SAM API key' : 'Set SAM API key';
+  $('samApiKeyButton').title = samStatus.configured ? 'Replace and validate the locally saved SAM.gov production API key' : 'Enter and validate the SAM.gov production API key required for federal debarment collection';
   $('sourceCount').textContent = sources.length + ' collectors';
   $('navSources').textContent = sources.length;
   $('sitesHint').textContent = '7 source categories · PACER excluded · OSHA/DOL shared';
@@ -452,7 +452,7 @@ async function saveSamApiKey(event) {
     await refreshAll();
   } catch (error) {
     $('samKeyMessage').textContent = error.message;
-    localEvent('ERROR', 'SAM.gov Alpha API key test failed: ' + error.message);
+    localEvent('ERROR', 'SAM.gov API key test failed: ' + error.message);
   } finally {
     button.disabled = false;
   }
