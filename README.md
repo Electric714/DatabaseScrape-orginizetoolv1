@@ -101,13 +101,17 @@ The production endpoint is used for live public exclusion checks. Exact active f
 
 ## BBB Business Profiles / Complaints — Source 3
 
-BBB is a built-in targeted parser. It does not perform a broad crawl of BBB.org and it does not use BBB data to populate unrelated bidder fields.
+BBB is a built-in targeted collector, but it no longer uses BBB's interactive `/search?...` route. Live Windows diagnostics showed that route could receive an access challenge before any business profile was parsed, and BBB's current `robots.txt` disallows generic query-string crawling while publishing a dedicated business-profile sitemap index.
 
-For every approved master bidder, the adapter searches only the current `contractor_name` and any `related_companies`, using the master city/state/ZIP as location context. Candidate BBB profiles are matched conservatively by normalized business identity plus location evidence. This is specifically designed to avoid same-name false matches such as businesses with similar names in different cities.
+The current acquisition path is:
 
-The collection path is:
+`master bidder → BBB-published business-profile sitemap index → relevant state sitemap blocks → plausible profile URL slug/state → exact profile identity + location verification → matched /complaints page → aggregate complaint evidence`
 
-`master bidder → targeted BBB company/location lookup → plausible profile candidates → exact profile identity check → matched /complaints page → aggregate complaint evidence`
+The published sitemap index is `https://www.bbb.org/sitemap-business-profiles-index.xml`. A one-time live structure probe on 2026-09-15 confirmed 575 child business-profile sitemaps with HTTP range support and strong geographic clustering. The POC maps the six states represented in the supplied bidder database (FL, IL, MN, MO, OH, WI) to their verified sitemap clusters and includes one neighboring sitemap on each boundary. No `/search` URL is generated or allowed by the BBB adapter.
+
+Sitemap index/child XML stays on ordinary HTTP. Sitemap URLs are only discovery hints: a URL slug is never enough to update the database. For an already-discovered profile or `/complaints` document, the local application may use Chromium's normal document navigation, while still enforcing robots policy and the adapter's exact BBB profile boundary. It does not solve CAPTCHAs or bypass an explicit challenge; a 401/403/429 or challenge remains an incomplete run.
+
+The collector opens a plausible profile and requires exact normalized business identity plus location corroboration from the actual profile. Only then does it read the direct `/complaints` page.
 
 BBB is authoritative for exactly one master field:
 
@@ -115,13 +119,11 @@ BBB is authoritative for exactly one master field:
 
 The field semantics are:
 
-- `Y` — at least one exact company/location BBB profile reports one or more complaints in BBB's rolling three-year complaint summary.
-- `N` — an exact matched BBB profile reports zero complaints in the three-year summary, or a complete targeted search found no exact/plausible BBB profile attributable to that bidder.
-- blank — similar profiles require manual identity review, a matched profile's complaint summary could not be parsed reliably, or collection was incomplete.
+- `Y` — an exact company/location BBB profile reports one or more complaints in BBB's rolling three-year complaint summary.
+- `N` — an exact matched BBB profile was successfully reached and reports zero complaints in the three-year summary.
+- blank — no exact profile was found, the selected state is not mapped by this POC, identity is ambiguous, the complaint summary could not be parsed reliably, or any sitemap/profile/complaint request was blocked or incomplete.
 
-The evidence record retains the matched BBB profile URL/name/address, BBB's three-year complaint count, complaints closed in the last 12 months, and available complaint date/type/status metadata. Consumer complaint narratives are deliberately **not retained** because the bidder database only needs complaint presence plus enough provenance to review the finding.
-
-The parser has multiple layout fallbacks: ordinary server-rendered profile links, embedded JSON search payloads, JSON-LD profile identity data, semantic text/address parsing, and flexible complaint-summary wording. It follows at most three explicit search-result pages and uses one request at a time with a built-in delay. A 401/403/429 or explicit access challenge stops the source rather than attempting to defeat the site's controls.
+A missing sitemap match is deliberately **not** treated as zero complaints. Consumer complaint narratives are not retained; only the summary counts and limited date/type/status metadata needed for review are kept.
 
 ## Query-focused source integrations
 Three website positions are still **pending**. Source 1 is OSHA/DOL, Source 2 is SAM.gov Federal Debarment, and Source 3 is the BBB complaint parser.

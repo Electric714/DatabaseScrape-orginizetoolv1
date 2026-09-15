@@ -36,7 +36,7 @@ from .models import OshaStatus, ResearchField, ScanOptions, SourceCreate, Source
 from .bidder_schema import BIDDER_COLUMNS, bidder_row, parse_bidder_csv
 from .osha_adapter import DOL_INSPECTION_ENDPOINT, _rows as parse_dol_rows
 from .sam_adapter import SAM_EXCLUSIONS_ENDPOINT, _payload as parse_sam_payload
-from .bbb_adapter import BBB_SEARCH_ENDPOINT
+from .bbb_sitemap_adapter import BBB_SITEMAP_INDEX
 from .state_adapter import MN_URL
 from .state_sources import IL_URL, WI_URL
 from .violation_tracker_adapter import VT_URL
@@ -156,14 +156,14 @@ async def ensure_builtin_bbb_source() -> dict:
     existing = next((source for source in sources if _is_bbb_source(source)), None)
     desired = {
         "name": BBB_SOURCE_NAME,
-        "start_url": BBB_SEARCH_ENDPOINT,
+        "start_url": BBB_SITEMAP_INDEX,
         "auto_scan": False,
         "interval_minutes": 1440,
         "max_pages": 5000,
         "max_depth": 5,
         "concurrency": 1,
-        "delay_ms": 1500,
-        "render_mode": "auto",
+        "delay_ms": 500,
+        "render_mode": "http",
         "respect_robots": True,
     }
     if existing:
