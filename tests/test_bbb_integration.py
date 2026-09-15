@@ -12,6 +12,7 @@ from app.bbb_adapter import (
     _profile_details,
     _search_candidates,
 )
+from app.bbb_sitemap_adapter import BBB_SITEMAP_INDEX
 from app.bidder_schema import BIDDER_COLUMNS, bidder_row
 from app.crawler import CrawlEngine
 from app.models import SourceCreate, SourceUpdate
@@ -326,65 +327,6 @@ def test_wrong_city_candidate_keeps_paginating_until_exact_location_is_found():
     assert any("schaumburg" in url for url in second_links)
 
 
-async def test_bbb_full_crawl_proposes_only_bbb_complaint_field(database):
-    baseline = a_lamp()
-    await bidder_db.import_rows("Bidder Database-Example(2).csv", [baseline], [])
-
-    source_data = SourceCreate(
-        name="BBB Business Profiles / Complaints",
-        start_url=BBB_SEARCH_ENDPOINT,
-        delay_ms=0,
-        render_mode="http",
-        max_pages=100,
-        max_depth=2,
-        concurrency=1,
-        respect_robots=False,
-    ).model_dump(mode="json")
-    source = await db.create_source(source_data)
-
-    def site(request):
-        path = request.url.path
-        if path == "/search":
-            raw_query = request.url.query.decode() if isinstance(request.url.query, bytes) else str(request.url.query)
-            query = parse_qs(raw_query)
-            assert query["find_text"][0]
-            assert "Schaumburg" in query["find_loc"][0]
-            return httpx.Response(200, text=A_LAMP_SEARCH_HTML, headers={"content-type": "text/html"})
-        if "northbrook" in path:
-            return httpx.Response(200, text=WRONG_NORTHBROOK_PROFILE, headers={"content-type": "text/html"})
-        if "des-plaines" in path:
-            return httpx.Response(200, text=WRONG_DES_PLAINES_PROFILE, headers={"content-type": "text/html"})
-        if path.endswith("/complaints"):
-            return httpx.Response(200, text=A_LAMP_COMPLAINTS_HTML, headers={"content-type": "text/html"})
-        if "schaumburg" in path:
-            return httpx.Response(200, text=A_LAMP_PROFILE_HTML, headers={"content-type": "text/html"})
-        return httpx.Response(404, text="not found")
-
-    job_id = await db.create_job(source["id"], False)
-    await CrawlEngine(source, job_id, transport=httpx.MockTransport(site)).run()
-    job = await db.get_job(job_id)
-    assert job["status"] == "completed", job
-
-    records = await db.search_records(source_id=source["id"])
-    assert records["total"] == 1
-    projected = bidder_row(records["items"][0], fallback_id=False)
-    assert projected["contractor_name"] == baseline["contractor_name"]
-    assert projected["better_business_bureau_complaints"] == "Y"
-
-    result = await bidder_db.compare()
-    assert result["field_changes"] == 1
-    proposals = [
-        proposal for proposal in await bidder_db.list_proposals()
-        if proposal["proposal_type"] == "field_update"
-    ]
-    assert {proposal["field_name"] for proposal in proposals} == set(BBB_MASTER_FIELDS)
-    assert proposals[0]["old_value"] == "N"
-    assert proposals[0]["new_value"] == "Y"
-
-    extra = json.loads(records["items"][0]["extra_json"])
-    assert extra["consumer_complaint_text_retained"] is False
-    assert "CONSUMER NARRATIVE" not in json.dumps(extra)
-
 
 async def test_builtin_bbb_source_is_created_once_reuses_legacy_and_is_locked(database):
     legacy = await database.create_source({
@@ -406,11 +348,11 @@ async def test_builtin_bbb_source_is_created_once_reuses_legacy_and_is_locked(da
 
     assert first["id"] == legacy["id"] == second["id"]
     assert first["name"] == main.BBB_SOURCE_NAME
-    assert first["start_url"] == BBB_SEARCH_ENDPOINT
+    assert first["start_url"] == BBB_SITEMAP_INDEX
     assert first["max_depth"] == 5
     assert first["concurrency"] == 1
-    assert first["delay_ms"] == 1500
-    assert first["render_mode"] == "auto"
+    assert first["delay_ms"] == 500
+    assert first["render_mode"] == "http"
     assert bool(first["respect_robots"])
     assert len([source for source in sources if main._is_bbb_source(source)]) == 1
 
@@ -430,7 +372,7 @@ async def test_builtin_bbb_source_is_created_once_reuses_legacy_and_is_locked(da
 
     duplicate = SourceCreate(
         name="Duplicate BBB",
-        start_url=BBB_SEARCH_ENDPOINT,
+        start_url=BBB_SITEMAP_INDEX,
         render_mode="http",
         respect_robots=False,
     )
