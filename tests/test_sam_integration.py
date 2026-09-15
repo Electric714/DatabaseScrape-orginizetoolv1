@@ -69,16 +69,17 @@ def bidder(**changes):
     return row
 
 
-def test_sam_adapter_uses_documented_alpha_endpoint_and_only_owns_combined_debarment(monkeypatch):
+def test_sam_adapter_uses_documented_production_endpoint_and_only_owns_combined_debarment(monkeypatch):
     monkeypatch.setenv("SAM_API_KEY", "synthetic-sam-test-key")
     adapter = SamExclusionsAdapter()
 
     assert adapter.api_source is True
     assert adapter.canonical_start_url == SAM_EXCLUSIONS_ENDPOINT
+    assert urlsplit(SAM_EXCLUSIONS_ENDPOINT).hostname == "api.sam.gov"
     assert adapter.master_fields == ("state_federal_debarment",)
     assert set(adapter.master_fields) == set(SAM_MASTER_FIELDS)
     assert adapter.allowed_url(SAM_EXCLUSIONS_ENDPOINT)
-    assert not adapter.allowed_url("https://api-alpha.sam.gov/entity-information/v4/entities")
+    assert not adapter.allowed_url("https://api.sam.gov/entity-information/v4/entities")
 
     logical = adapter.seed_urls([bidder()])[0]
     assert "synthetic-sam-test-key" not in logical
@@ -101,8 +102,8 @@ def test_sam_exact_active_match_writes_positive_only(monkeypatch):
     record, = adapter.finalize_records(complete=True)
 
     assert record["company"] == "Example Builders LLC"
-    assert record["state_federal_debarment"] == ""
-    assert record["extra"]["environment"] == "alpha_test"
+    assert record["state_federal_debarment"] == "Y"
+    assert record["extra"]["environment"] == "production"
     assert record["extra"]["federal_component_only"] is True
     assert record["extra"]["negative_result_writes_combined_field"] is False
     assert len(record["extra"]["active_federal_exclusions"]) == 1
@@ -128,7 +129,7 @@ async def test_sam_api_crawl_proposes_only_positive_debarment_and_never_stores_k
     await bidder_db.import_rows("baseline.csv", [baseline], [])
 
     source_data = SourceCreate(
-        name="SAM.gov Federal Debarment / Exclusions (Alpha Test API)",
+        name="SAM.gov Federal Debarment / Exclusions",
         start_url=SAM_EXCLUSIONS_ENDPOINT,
         delay_ms=0,
         render_mode="http",
@@ -155,7 +156,7 @@ async def test_sam_api_crawl_proposes_only_positive_debarment_and_never_stores_k
     stored = records["items"][0]
     assert "integration-secret-sam-key" not in stored["source_url"]
     projected = bidder_row(stored, fallback_id=False)
-    assert projected["state_federal_debarment"] == ""
+    assert projected["state_federal_debarment"] == "Y"
 
     # Inspect every persisted crawl URL directly. The contractor-level aggregate
     # evidence URL need not be byte-for-byte identical to the canonical page-cache
@@ -171,12 +172,14 @@ async def test_sam_api_crawl_proposes_only_positive_debarment_and_never_stores_k
     assert all("api_key=" not in url.lower() for url in page_urls)
 
     result = await bidder_db.compare()
-    assert result["field_changes"] == 0
+    assert result["field_changes"] == 1
     proposals = [
         proposal for proposal in await bidder_db.list_proposals()
         if proposal["proposal_type"] == "field_update"
     ]
-    assert proposals == []
+    assert len(proposals) == 1
+    assert proposals[0]["field_name"] == "state_federal_debarment"
+    assert proposals[0]["new_value"] == "Y"
 
 
 async def test_builtin_sam_source_is_created_once_and_locked(database):
@@ -244,7 +247,6 @@ async def test_sam_api_key_is_validated_before_save_and_never_returned(database,
 
     status = await main.sam_integration_status()
     assert status["configured"] is True
-    assert status["environment"] == "alpha"
     assert "api_key" not in status
     assert "synthetic-valid-sam-key" not in json.dumps(status)
 
@@ -253,7 +255,7 @@ async def test_rejected_sam_key_is_not_saved(database, monkeypatch):
     saved = []
 
     async def fake_validate(_value):
-        raise ValueError("SAM.gov Alpha rejected this API key")
+        raise ValueError("SAM.gov rejected this API key")
 
     monkeypatch.setattr(main, "validate_sam_api_key", fake_validate)
     monkeypatch.setattr(main, "save_sam_api_key", lambda value: saved.append(value))
