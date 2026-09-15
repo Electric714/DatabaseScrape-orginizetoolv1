@@ -37,12 +37,27 @@ async def validate_public_url(url: str) -> list[str]:
 
 class PublicTransport(httpx.AsyncHTTPTransport):
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        addresses = await validate_public_url(str(request.url))
+        logical_url = request.url
+        outbound_url = logical_url
+        outbound_headers = request.headers.copy()
+
+        # The current DOL Open Data v4 guide documents X-API-KEY as a query
+        # parameter. Callers intentionally keep the credential in an HTTP header
+        # until this final guarded transport boundary so source URLs, page caches,
+        # activity logs, evidence records, and diagnostics remain credential-free.
+        # Only the actual request placed on the wire gets the documented parameter.
+        if logical_url.host.lower() in {"apiprod.dol.gov", "api.dol.gov"}:
+            dol_key = outbound_headers.get("X-API-KEY")
+            if dol_key:
+                outbound_url = logical_url.copy_set_param("X-API-KEY", dol_key)
+                del outbound_headers["X-API-KEY"]
+
+        addresses = await validate_public_url(str(outbound_url))
         # Keep the original Host and TLS certificate name while connecting only
         # to a vetted numeric IP. A second DNS answer cannot rebind the socket.
         pinned = httpx.Request(
-            request.method, request.url.copy_with(host=addresses[0]),
-            headers=request.headers, stream=request.stream,
-            extensions={**request.extensions, "sni_hostname": request.url.host},
+            request.method, outbound_url.copy_with(host=addresses[0]),
+            headers=outbound_headers, stream=request.stream,
+            extensions={**request.extensions, "sni_hostname": logical_url.host},
         )
         return await super().handle_async_request(pinned)
