@@ -66,6 +66,18 @@ def test_seed_uses_published_sitemap_and_never_bbb_search():
     assert not adapter.allowed_url(PROFILE + "?page=2")
     assert not adapter.allowed_url("https://www.bbb.org/sitemap-business-profiles-327.xml")
 
+    # Sitemaps stay on guarded HTTP. Only already-discovered profile documents
+    # may use Chromium, and browser navigation is still restricted to exact BBB
+    # profile/complaints URLs with no query string.
+    assert not adapter.browser_fetch_url(BBB_SITEMAP_INDEX)
+    assert adapter.browser_fetch_url(PROFILE)
+    assert adapter.browser_fetch_url(PROFILE + "/complaints")
+    assert adapter.browser_allowed_url(PROFILE)
+    assert adapter.browser_allowed_url(PROFILE + "/complaints")
+    assert not adapter.browser_allowed_url("https://www.bbb.org/search")
+    assert not adapter.browser_allowed_url(PROFILE + "?page=2")
+    assert adapter.browser_respect_robots is True
+
 
 def test_wisconsin_index_selection_is_narrow_and_includes_boundary_padding():
     adapter = BbbSitemapComplaintsAdapter()
