@@ -60,4 +60,9 @@ class PublicTransport(httpx.AsyncHTTPTransport):
             headers=outbound_headers, stream=request.stream,
             extensions={**request.extensions, "sni_hostname": logical_url.host},
         )
-        return await super().handle_async_request(pinned)
+        response = await super().handle_async_request(pinned)
+        # Do not expose the credential-bearing internal wire URL back to the
+        # crawler. Redirect resolution, caches, evidence, and diagnostics continue
+        # to see the original credential-free logical request URL.
+        response.request = request
+        return response
