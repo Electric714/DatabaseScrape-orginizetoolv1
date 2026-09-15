@@ -1,0 +1,241 @@
+name: Patch DOL auth and BBB acquisition
+
+on:
+  push:
+    branches: [fix/dol-auth-bbb-diagnostics]
+    paths: [.github/workflows/patch-dol-bbb.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply documented DOL auth and BBB browser fallback
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace(path_name, old, new):
+              path = Path(path_name)
+              text = path.read_text(encoding="utf-8")
+              if old not in text:
+                  raise SystemExit(f"expected text missing in {path_name}: {old[:120]!r}")
+              path.write_text(text.replace(old, new), encoding="utf-8")
+
+          replace(
+              "app/osha_adapter.py",
+              '''    def request_headers(self, url: str) -> dict[str, str]:
+        key = get_dol_api_key()
+        if not key:
+            raise ValueError(
+                "DOL_API_KEY is not configured. Register for the free DOL Open Data API "
+                "account, then save the key in the OSHA source setup."
+            )
+        return {"X-API-KEY": key, "Accept": "application/json"}
+''',
+              '''    def request_headers(self, url: str) -> dict[str, str]:
+        if not get_dol_api_key():
+            raise ValueError(
+                "DOL_API_KEY is not configured. Register for the free DOL Open Data API "
+                "account, then save the key in the OSHA source setup."
+            )
+        return {"Accept": "application/json"}
+
+    def request_url(self, url: str) -> str:
+        """Inject DOL's documented X-API-KEY query parameter only at request time."""
+        key = get_dol_api_key()
+        if not key:
+            raise ValueError(
+                "DOL_API_KEY is not configured. Register for the free DOL Open Data API "
+                "account, then save the key in the OSHA source setup."
+            )
+        parts = urlsplit(url)
+        query = parse_qs(parts.query, keep_blank_values=True)
+        query["X-API-KEY"] = [key]
+        pairs = [(name, value) for name, values in query.items() for value in values]
+        return parts._replace(query=urlencode(pairs)).geturl()
+'''
+          )
+
+          replace(
+              "app/main.py",
+              '''async def validate_dol_api_key(api_key: str) -> None:
+    # Validate without placing the credential in a URL, source row, or activity log.
+    test_url = DOL_INSPECTION_ENDPOINT + "?limit=1&fields=activity_nr"
+    try:
+        async with httpx.AsyncClient(
+            transport=PublicTransport(),
+            trust_env=False,
+            follow_redirects=False,
+            timeout=20.0,
+        ) as client:
+            response = await client.get(
+                test_url,
+                headers={"X-API-KEY": api_key, "Accept": "application/json"},
+            )
+''',
+              '''async def validate_dol_api_key(api_key: str) -> None:
+    # DOL v4 documents X-API-KEY as a query parameter. Keep it out of every
+    # stored/logged logical URL and inject it only into this outbound request.
+    try:
+        async with httpx.AsyncClient(
+            transport=PublicTransport(),
+            trust_env=False,
+            follow_redirects=False,
+            timeout=20.0,
+        ) as client:
+            response = await client.get(
+                DOL_INSPECTION_ENDPOINT,
+                params={"limit": 1, "fields": "activity_nr", "X-API-KEY": api_key},
+                headers={"Accept": "application/json"},
+            )
+'''
+          )
+
+          replace(
+              "tests/test_osha_adapter.py",
+              '''    assert set(adapter.master_fields) == set(OSHA_MASTER_FIELDS)
+    assert adapter.request_headers(DOL_INSPECTION_ENDPOINT)["X-API-KEY"] == "test-dol-api-key"
+    assert adapter.allowed_url(DOL_INSPECTION_ENDPOINT)
+''',
+              '''    assert set(adapter.master_fields) == set(OSHA_MASTER_FIELDS)
+    assert adapter.request_headers(DOL_INSPECTION_ENDPOINT) == {"Accept": "application/json"}
+    injected = parse_qs(urlsplit(adapter.request_url(DOL_INSPECTION_ENDPOINT)).query)
+    assert injected["X-API-KEY"] == ["test-dol-api-key"]
+    assert adapter.allowed_url(DOL_INSPECTION_ENDPOINT)
+'''
+          )
+
+          replace(
+              "tests/test_osha_adapter.py",
+              '''    def site(request):
+        assert request.url.path != "/robots.txt"
+        assert request.headers.get("x-api-key") == "integration-test-key"
+        path = request.url.path
+''',
+              '''    def site(request):
+        assert request.url.path != "/robots.txt"
+        assert request.headers.get("x-api-key") is None
+        assert request.url.params.get("X-API-KEY") == "integration-test-key"
+        path = request.url.path
+'''
+          )
+
+          replace(
+              "tests/test_dol_integration.py",
+              '''from app import main
+from app.osha_adapter import DOL_INSPECTION_ENDPOINT
+from app.models import SourceCreate, SourceUpdate
+''',
+              '''from urllib.parse import parse_qs, urlsplit
+
+import httpx
+
+from app import main
+from app.osha_adapter import DOL_INSPECTION_ENDPOINT
+from app.models import SourceCreate, SourceUpdate
+'''
+          )
+
+          replace(
+              "tests/test_dol_integration.py",
+              '''async def test_builtin_osha_cannot_be_edited_deleted_or_duplicated(database):
+''',
+              '''async def test_validator_uses_documented_query_parameter(database, monkeypatch):
+    observed = {}
+
+    def handler(request):
+        observed["url"] = str(request.url)
+        observed["header"] = request.headers.get("x-api-key")
+        return httpx.Response(200, json={"data": []})
+
+    monkeypatch.setattr(main, "PublicTransport", lambda: httpx.MockTransport(handler))
+    await main.validate_dol_api_key("synthetic-dol-key-12345")
+
+    query = parse_qs(urlsplit(observed["url"]).query)
+    assert query["X-API-KEY"] == ["synthetic-dol-key-12345"]
+    assert query["limit"] == ["1"]
+    assert query["fields"] == ["activity_nr"]
+    assert observed["header"] is None
+
+
+async def test_builtin_osha_cannot_be_edited_deleted_or_duplicated(database):
+'''
+          )
+
+          replace(
+              "app/bbb_adapter.py",
+              '''    query_mode = True
+    always_parse = True
+    fail_fast_access_errors = True
+''',
+              '''    query_mode = True
+    always_parse = True
+    fail_fast_access_errors = True
+    # Raw HTTP was challenged by BBB in real diagnostics. Use Chromium's own
+    # document navigation locally, but still fail closed if BBB serves a challenge.
+    direct_browser = True
+'''
+          )
+
+          replace(
+              "app/crawler.py",
+              'raise ValueError("OSHA browser session could not open the source landing page")',
+              'raise ValueError("Source browser session could not open the source landing page")'
+          )
+          replace(
+              "app/crawler.py",
+              'raise ValueError(f"OSHA browser session landing page HTTP {prime_status}")',
+              'raise ValueError(f"Source browser session landing page HTTP {prime_status}")'
+          )
+
+          replace(
+              "tests/test_bbb_integration.py",
+              '''def test_all_24_example_bidders_generate_targeted_queries_only_from_master_rows():
+    adapter = BbbComplaintsAdapter()
+''',
+              '''def test_all_24_example_bidders_generate_targeted_queries_only_from_master_rows():
+    adapter = BbbComplaintsAdapter()
+    assert adapter.direct_browser is True
+    assert adapter.fail_fast_access_errors is True
+'''
+          )
+
+          replace(
+              "README.md",
+              'The DOL Open Data API requires an API key for data requests. DOL describes registration as a free API account. The built-in OSHA card has a **Set API key** button; the app tests the key against DOL before saving it to `.runtime/dol_api_key.txt`. The key can also be supplied through the `DOL_API_KEY` environment variable. `.runtime/` and `.env` are ignored by Git. The application sends the key only in the `X-API-KEY` request header; it is never placed in a URL, source record, activity event, export, or API response.',
+              'The DOL Open Data API requires an API key for data requests. DOL describes registration as a free API account. The built-in OSHA card has a **Set API key** button; the app tests the key against DOL before saving it to `.runtime/dol_api_key.txt`. The key can also be supplied through the `DOL_API_KEY` environment variable. `.runtime/` and `.env` are ignored by Git. DOL\'s current v4 guide documents `X-API-KEY` as a query parameter. The application therefore injects it only into the outbound request URL at send time; the credential is never retained in the stored source URL, page cache, evidence record, activity event, diagnostic export, or bidder export.'
+          )
+
+          replace(
+              "README.md",
+              'The parser has multiple layout fallbacks: ordinary server-rendered profile links, embedded JSON search payloads, JSON-LD profile identity data, semantic text/address parsing, and flexible complaint-summary wording. It follows at most three explicit search-result pages and uses one request at a time with a built-in delay. A 401/403/429 or explicit access challenge stops the source rather than attempting to defeat the site\'s controls.',
+              'The parser has multiple layout fallbacks: ordinary server-rendered profile links, embedded JSON search payloads, JSON-LD profile identity data, semantic text/address parsing, and flexible complaint-summary wording. It follows at most three explicit search-result pages and uses one request at a time with a built-in delay. Real diagnostics showed BBB challenging the raw HTTP client before any search result was parsed, so BBB now uses a local Chromium document request for these exact search/profile URLs. If BBB still returns a 401/403/429 or explicit access challenge, collection stops and remains unknown; the application does not bypass CAPTCHAs or other access controls.'
+          )
+
+          replace(
+              "app/source_catalog.py",
+              '''    {"key": "bbb", "name": "Better Business Bureau", "method": "Targeted HTML", "status": "Blocked",
+     "fields": ["better_business_bureau_complaints"], "hosts": ["bbb.org", "www.bbb.org"],
+     "note": "Search HTML retrieved; profile returned 403. Complaint collection not yet proven. No profile is not zero complaints."},
+''',
+              '''    {"key": "bbb", "name": "Better Business Bureau", "method": "Targeted HTML via local Chromium", "status": "Browser fallback added; live validation pending",
+     "fields": ["better_business_bureau_complaints"], "hosts": ["bbb.org", "www.bbb.org"],
+     "note": "Real diagnostics hit an access challenge at /search before profile discovery. Chromium document navigation is attempted locally; any remaining challenge fails closed. No profile is not zero complaints."},
+'''
+          )
+
+      - name: Run focused tests
+        run: |
+          python -m pip install -r requirements.txt
+          pytest -q tests/test_dol_integration.py tests/test_osha_adapter.py tests/test_bbb_integration.py
+      - name: Commit fixes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/osha_adapter.py app/main.py app/bbb_adapter.py app/crawler.py app/source_catalog.py tests/test_osha_adapter.py tests/test_dol_integration.py tests/test_bbb_integration.py README.md
+          git commit -m "Fix DOL API authentication and BBB acquisition path"
+          git push
