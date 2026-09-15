@@ -29,18 +29,6 @@ class GenericAdapter:
         return True
 
 
-class BrowserBbbComplaintsAdapter(BbbComplaintsAdapter):
-    """BBB parser fetched through Chromium's normal document network stack.
-
-    Real diagnostics showed BBB challenging the raw HTTP client before the first
-    search page could be parsed. This changes only the acquisition mechanism for
-    the same narrowly allowed search/profile URLs. The crawler still detects an
-    access challenge after navigation and fails closed rather than bypassing it.
-    """
-
-    direct_browser = True
-
-
 # Register exact hostnames here. Adapters return a stable, namespaced external_id
 # and can narrow query/pagination boundaries, but cannot widen the network policy.
 ADAPTERS: dict[str, type[GenericAdapter]] = {
@@ -56,8 +44,8 @@ ADAPTERS: dict[str, type[GenericAdapter]] = {
     "labor.illinois.gov": IllinoisDebarmentAdapter,
     "wisconsindot.gov": WisconsinDebarmentAdapter,
     "www.wisconsindot.gov": WisconsinDebarmentAdapter,
-    "www.bbb.org": BrowserBbbComplaintsAdapter,
-    "bbb.org": BrowserBbbComplaintsAdapter,
+    "www.bbb.org": BbbComplaintsAdapter,
+    "bbb.org": BbbComplaintsAdapter,
 }
 
 
