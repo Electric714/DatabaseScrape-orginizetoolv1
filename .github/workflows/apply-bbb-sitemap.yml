@@ -9,7 +9,7 @@ on:
       - scripts/probe_bbb_live_access.py
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   probe:
@@ -27,11 +27,5 @@ jobs:
         env:
           PYTHONPATH: .
         run: python scripts/probe_bbb_live_access.py
-      - name: Commit sanitized probe result
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add .probe/bbb_live_access_summary.txt
-          git commit -m "Record sanitized BBB Chromium probe"
-          git pull --rebase origin fix/bbb-sitemap-discovery
-          git push origin HEAD:fix/bbb-sitemap-discovery
+      - name: Show sanitized result
+        run: cat .probe/bbb_live_access_summary.txt
