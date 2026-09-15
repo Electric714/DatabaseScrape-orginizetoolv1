@@ -19,11 +19,12 @@ new = '''        "concurrency": 1,
         "render_mode": "http",
         "respect_robots": True,
 '''
-if old not in text:
-    raise SystemExit("BBB source settings block not found")
-text = text.replace(old, new, 1)
+if old in text:
+    text = text.replace(old, new, 1)
 if "BBB_SEARCH_ENDPOINT" in text:
     raise SystemExit("legacy BBB search endpoint still referenced by main.py")
+if '"start_url": BBB_SITEMAP_INDEX,' not in text:
+    raise SystemExit("BBB sitemap start URL was not wired")
 main.write_text(text, encoding="utf-8")
 
 readme = Path("README.md")
@@ -61,3 +62,37 @@ body, count = pattern.subn(replacement, body, count=1)
 if count != 1:
     raise SystemExit("README BBB section not found exactly once")
 readme.write_text(body, encoding="utf-8")
+
+# The legacy BBB parser unit tests remain useful for HTML parsing, but the old
+# CrawlEngine integration test intentionally exercised /search. The new sitemap
+# integration test supersedes that network-path test.
+test_path = Path("tests/test_bbb_integration.py")
+tests = test_path.read_text(encoding="utf-8")
+if "from app.bbb_sitemap_adapter import BBB_SITEMAP_INDEX" not in tests:
+    tests = tests.replace(
+        "from app.bidder_schema import BIDDER_COLUMNS, bidder_row\n",
+        "from app.bbb_sitemap_adapter import BBB_SITEMAP_INDEX\nfrom app.bidder_schema import BIDDER_COLUMNS, bidder_row\n",
+    )
+tests, removed = re.subn(
+    r"\nasync def test_bbb_full_crawl_proposes_only_bbb_complaint_field\(database\):.*?(?=\nasync def test_builtin_bbb_source_is_created_once_reuses_legacy_and_is_locked)",
+    "\n",
+    tests,
+    count=1,
+    flags=re.S,
+)
+if removed not in {0, 1}:
+    raise SystemExit("unexpected legacy BBB integration-test count")
+tests = tests.replace('assert first["start_url"] == BBB_SEARCH_ENDPOINT', 'assert first["start_url"] == BBB_SITEMAP_INDEX')
+tests = tests.replace('assert first["delay_ms"] == 1500', 'assert first["delay_ms"] == 500')
+tests = tests.replace('assert first["render_mode"] == "auto"', 'assert first["render_mode"] == "http"')
+# In the built-in locking test, duplication must now target the canonical sitemap source.
+marker = '''    duplicate = SourceCreate(
+        name="Duplicate BBB",
+        start_url=BBB_SEARCH_ENDPOINT,
+'''
+if marker in tests:
+    tests = tests.replace(marker, '''    duplicate = SourceCreate(
+        name="Duplicate BBB",
+        start_url=BBB_SITEMAP_INDEX,
+''', 1)
+test_path.write_text(tests, encoding="utf-8")
