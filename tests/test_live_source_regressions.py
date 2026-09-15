@@ -25,17 +25,19 @@ async def test_dol_api_key_moves_to_documented_query_parameter_at_egress(monkeyp
     monkeypatch.setattr(security, "validate_public_url", resolve)
     monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", send)
 
+    logical_url = "https://apiprod.dol.gov/v4/get/OSHA/inspection/json?limit=1"
     async with httpx.AsyncClient(transport=security.PublicTransport()) as client:
         response = await client.get(
-            "https://apiprod.dol.gov/v4/get/OSHA/inspection/json?limit=1",
+            logical_url,
             headers={"X-API-KEY": "synthetic-dol-key", "Accept": "application/json"},
         )
 
     assert response.status_code == 200
-    assert "X-API-KEY" not in {name.upper(): value for name, value in observed["headers"].items()}
     assert "x-api-key" not in observed["headers"]
     assert parse_qs(httpx.URL(observed["wire_url"]).query.decode())["X-API-KEY"] == ["synthetic-dol-key"]
     assert parse_qs(httpx.URL(observed["validated_url"]).query.decode())["X-API-KEY"] == ["synthetic-dol-key"]
+    assert str(response.url) == logical_url
+    assert "synthetic-dol-key" not in str(response.url)
 
 
 def test_bbb_registered_adapter_uses_local_browser_and_keeps_fail_closed_behavior():
