@@ -58,7 +58,7 @@ def test_live_gui_smoke(database, monkeypatch):
                 expect(page.locator("#oshaApiKeyButton")).to_be_visible()
                 expect(page.locator("#oshaApiKeyButton")).to_have_text("Set OSHA API key")
                 expect(page.locator("#samApiKeyButton")).to_be_visible()
-                expect(page.locator("#samApiKeyButton")).to_have_text("Set SAM test API key")
+                expect(page.locator("#samApiKeyButton")).to_have_text("Set SAM API key")
                 expect(page.get_by_role("heading", name="OSHA / DOL Enforcement API")).to_be_visible()
                 expect(page.get_by_role("button", name="Set API key")).to_be_visible()
                 expect(page.get_by_role("button", name="Collect OSHA", exact=True)).to_be_disabled()

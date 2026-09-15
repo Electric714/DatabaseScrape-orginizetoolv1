@@ -95,7 +95,7 @@
         </div>
       </section>
       <section class="surface sources-panel" id="sourceSection" aria-labelledby="sourcesTitle">
-        <div class="section-heading"><div><div class="section-kicker">COLLECT / TARGETED RESEARCH</div><h2 id="sourcesTitle">Your research sites <span id="sourceCount">0 / 6</span></h2><p id="siteSetupNote">OSHA/DOL, SAM.gov Federal Debarment, and BBB complaints are built in. API-backed sources use their saved keys; BBB searches only the companies in the master bidder list.</p></div><div class="source-heading-actions"><button class="button primary small" id="oshaApiKeyButton" type="button">Set OSHA API key</button><button class="button primary small" id="samApiKeyButton" type="button">Set SAM test API key</button><button class="button subtle small" id="updateSites" disabled>Update configured sites</button></div></div>
+        <div class="section-heading"><div><div class="section-kicker">COLLECT / TARGETED RESEARCH</div><h2 id="sourcesTitle">Your research sites <span id="sourceCount">0 / 6</span></h2><p id="siteSetupNote">OSHA/DOL, SAM.gov Federal Debarment, and BBB complaints are built in. API-backed sources use their saved keys; BBB searches only the companies in the master bidder list.</p></div><div class="source-heading-actions"><button class="button primary small" id="oshaApiKeyButton" type="button">Set OSHA API key</button><button class="button primary small" id="samApiKeyButton" type="button">Set SAM API key</button><button class="button subtle small" id="updateSites" disabled>Update configured sites</button></div></div>
         <div class="research-selection"><label for="researchContractors">Companies to research (Ctrl/Command-click to select several)</label><select id="researchContractors" multiple size="5" aria-label="Companies to research"></select><p id="researchSelectionNote">Import a CSV, then select a few contractors for the first test.</p></div>
         <div class="source-heading-actions"><button class="button subtle small" data-test-api="dol">Test DOL API</button><button class="button subtle small" data-test-api="sam">Test SAM API</button></div>
         <div id="sourceCatalog"></div>
@@ -163,8 +163,8 @@
 </dialog>
 <dialog id="samKeyDialog" class="modal small-modal" aria-labelledby="samKeyDialogTitle">
   <div class="modal-top"><span class="section-kicker">BUILT-IN FEDERAL DEBARMENT INTEGRATION</span><button class="close-button" data-close="samKeyDialog" aria-label="Close SAM API key setup">×</button></div>
-  <h2 id="samKeyDialogTitle">Set the SAM.gov test API key.</h2>
-  <p class="modal-intro">Federal debarment is hardcoded to the official SAM.gov Exclusions API v4 Alpha/test endpoint. Paste the Alpha API key here; the app will test it before saving it locally.</p>
+  <h2 id="samKeyDialogTitle">Set the SAM.gov API key.</h2>
+  <p class="modal-intro">Federal debarment uses the official SAM.gov Exclusions API v4 production endpoint. Paste your SAM.gov Public API Key here; the app will test it before saving it locally.</p>
   <form id="samKeyForm">
     <label>SAM.gov Alpha/test API key<input id="samApiKey" type="password" required maxlength="512" autocomplete="new-password" placeholder="Paste SAM.gov test API key"></label>
     <p id="samApiKeyStatus" class="setup-note">The key is stored only on this computer under .runtime. It is injected into SAM requests at fetch time and is never written to source URLs, GitHub, bidder exports, or activity logs.</p>
