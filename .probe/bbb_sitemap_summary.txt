@@ -1,16 +1,17 @@
-FETCH https://www.bbb.org/sitemap-business-profiles-index.xml 200 text/xml 73616
+FETCH https://www.bbb.org/sitemap-business-profiles-index.xml 200 text/xml bytes 73616 range None accept_ranges None
 INDEX_COUNT 575
 INDEX_FIRST ['https://www.bbb.org/sitemap-business-profiles-1.xml', 'https://www.bbb.org/sitemap-business-profiles-2.xml', 'https://www.bbb.org/sitemap-business-profiles-3.xml', 'https://www.bbb.org/sitemap-business-profiles-4.xml', 'https://www.bbb.org/sitemap-business-profiles-5.xml', 'https://www.bbb.org/sitemap-business-profiles-6.xml', 'https://www.bbb.org/sitemap-business-profiles-7.xml', 'https://www.bbb.org/sitemap-business-profiles-8.xml', 'https://www.bbb.org/sitemap-business-profiles-9.xml', 'https://www.bbb.org/sitemap-business-profiles-10.xml']
 INDEX_LAST ['https://www.bbb.org/sitemap-business-profiles-571.xml', 'https://www.bbb.org/sitemap-business-profiles-572.xml', 'https://www.bbb.org/sitemap-business-profiles-573.xml', 'https://www.bbb.org/sitemap-business-profiles-574.xml', 'https://www.bbb.org/sitemap-business-profiles-575.xml']
-FETCH https://www.bbb.org/sitemap-business-profiles-1.xml 200 text/xml 2289666
+FETCH https://www.bbb.org/sitemap-business-profiles-1.xml 206 text/xml bytes 65536 range bytes 0-65535/2289666 accept_ranges None
+FETCH https://www.bbb.org/sitemap-business-profiles-1.xml 200 text/xml bytes 2289666 range None accept_ranges None
 CHILD https://www.bbb.org/sitemap-business-profiles-1.xml URL_COUNT 10000
 STATE_COUNTS [('md', 9942), ('pa', 9), ('ca', 6), ('va', 6), ('tx', 5), ('ny', 4), ('tn', 3), ('il', 3), ('fl', 3), ('ga', 3)]
 PATH_SHAPES [('/us/md/baltimore/profile/auto-repair/<business-slug>', 51), ('/us/md/ocean-city/profile/hotels/<business-slug>', 45), ('/us/md/baltimore/profile/construction-services/<business-slug>', 43), ('/us/md/baltimore/profile/lawyers/<business-slug>', 35), ('/us/md/baltimore/profile/mobile-auto-repair/<business-slug>', 32)]
-FETCH https://www.bbb.org/sitemap-business-profiles-2.xml 200 text/xml 2277357
+FETCH https://www.bbb.org/sitemap-business-profiles-2.xml 200 text/xml bytes 2277357 range None accept_ranges None
 CHILD https://www.bbb.org/sitemap-business-profiles-2.xml URL_COUNT 10000
 STATE_COUNTS [('md', 9981), ('ct', 2), ('tx', 2), ('de', 2), ('nc', 2), ('va', 2), ('az', 2), ('pa', 1), ('wi', 1), ('ny', 1)]
 PATH_SHAPES [('/us/md/baltimore/profile/lawyers/<business-slug>', 58), ('/us/md/baltimore/profile/general-contractor/<business-slug>', 53), ('/us/md/frederick/profile/general-contractor/<business-slug>', 51), ('/us/md/baltimore/profile/auto-repair/<business-slug>', 48), ('/us/md/frederick/profile/real-estate/<business-slug>', 37)]
-FETCH https://www.bbb.org/sitemap-business-profiles-3.xml 200 text/xml 2271243
+FETCH https://www.bbb.org/sitemap-business-profiles-3.xml 200 text/xml bytes 2271243 range None accept_ranges None
 CHILD https://www.bbb.org/sitemap-business-profiles-3.xml URL_COUNT 10000
 STATE_COUNTS [('md', 9950), ('fl', 6), ('ca', 5), ('tx', 5), ('va', 4), ('pa', 4), ('ny', 3), ('ga', 3), ('nc', 3), ('nj', 2)]
 PATH_SHAPES [('/us/md/frederick/profile/general-services/<business-slug>', 261), ('/us/md/mount-airy/profile/general-services/<business-slug>', 77), ('/us/md/baltimore/profile/lawyers/<business-slug>', 62), ('/us/md/baltimore/profile/restaurants/<business-slug>', 59), ('/us/md/frederick/profile/lawyers/<business-slug>', 44)]
