@@ -13,8 +13,9 @@ from .osha_adapter import company_core, contractor_aliases, clean_search_term
 SAM_ALPHA_API_BASE = "https://api-alpha.sam.gov"
 SAM_PRODUCTION_API_BASE = "https://api.sam.gov"
 SAM_EXCLUSIONS_PATH = "/entity-information/v4/exclusions"
-SAM_EXCLUSIONS_ENDPOINT = f"{SAM_ALPHA_API_BASE}{SAM_EXCLUSIONS_PATH}"
-SAM_PRODUCTION_EXCLUSIONS_ENDPOINT = f"{SAM_PRODUCTION_API_BASE}{SAM_EXCLUSIONS_PATH}"
+SAM_ALPHA_EXCLUSIONS_ENDPOINT = f"{SAM_ALPHA_API_BASE}{SAM_EXCLUSIONS_PATH}"
+SAM_EXCLUSIONS_ENDPOINT = f"{SAM_PRODUCTION_API_BASE}{SAM_EXCLUSIONS_PATH}"
+SAM_PRODUCTION_EXCLUSIONS_ENDPOINT = SAM_EXCLUSIONS_ENDPOINT
 SAM_PUBLIC_SEARCH = "https://sam.gov/search/?index=ex"
 SAM_MASTER_FIELDS = ("state_federal_debarment",)
 SAM_PAGE_SIZE = 10
@@ -167,7 +168,7 @@ def _normalized_entity(entity: dict) -> dict:
 
 
 class SamExclusionsAdapter:
-    """Built-in SAM.gov federal debarment adapter using the documented v4 Alpha API."""
+    """Built-in SAM.gov federal debarment adapter using the documented v4 production API."""
 
     query_mode = True
     always_parse = True
@@ -187,7 +188,7 @@ class SamExclusionsAdapter:
         key = get_sam_api_key()
         if not key:
             raise ValueError(
-                "SAM_API_KEY is not configured. Add the SAM.gov Alpha/test API key "
+                "SAM_API_KEY is not configured. Add the SAM.gov production API key "
                 "from the built-in Federal Debarment source."
             )
         parts = urlsplit(url)
@@ -349,13 +350,13 @@ class SamExclusionsAdapter:
             else:
                 narrative = (
                     "No exact active federal exclusion match was found in the completed SAM.gov "
-                    "Alpha/test API queries. The combined state/federal master field remains "
+                    "production API queries. The combined state/federal master field remains "
                     "unchanged because state debarment still requires separate research."
                 )
 
-            # SAM proves a positive federal exclusion. It cannot by itself prove the
-            # combined state_federal_debarment field is negative.
-            combined_value = ""  # Alpha/test evidence is never a real compliance finding.
+            # Production SAM proves a positive federal exclusion. It cannot by itself
+            # prove the combined state_federal_debarment field is negative.
+            combined_value = "Y" if matches else ""
             latest = ""
             for match in matches:
                 for action in match.get("actions") or []:
@@ -371,8 +372,8 @@ class SamExclusionsAdapter:
                 "state_federal_debarment": combined_value,
                 "extra": {
                     "master_id": contractor.get("_master_id"),
-                    "environment": "alpha_test",
-                    "source_system": "SAM.gov Exclusions API v4 Alpha/test",
+                    "environment": "production",
+                    "source_system": "SAM.gov Exclusions API v4 Production",
                     "api_endpoint": SAM_EXCLUSIONS_ENDPOINT,
                     "api_fields_written_to_master": list(SAM_MASTER_FIELDS),
                     "federal_component_only": True,
