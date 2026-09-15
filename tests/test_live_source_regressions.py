@@ -5,6 +5,7 @@ import httpx
 from app import security
 from app.adapters import adapter_for_url
 from app.bbb_adapter import BbbComplaintsAdapter
+from app.source_catalog import SOURCE_CATALOG
 
 
 async def test_dol_api_key_moves_to_documented_query_parameter_at_egress(monkeypatch):
@@ -40,10 +41,13 @@ async def test_dol_api_key_moves_to_documented_query_parameter_at_egress(monkeyp
     assert "synthetic-dol-key" not in str(response.url)
 
 
-def test_bbb_registered_adapter_uses_local_browser_and_keeps_fail_closed_behavior():
+def test_bbb_stays_fail_closed_until_supported_acquisition_is_validated():
     adapter = adapter_for_url("https://www.bbb.org/search")
     assert isinstance(adapter, BbbComplaintsAdapter)
-    assert adapter.direct_browser is True
+    assert not getattr(adapter, "direct_browser", False)
     assert adapter.fail_fast_access_errors is True
-    assert adapter.allowed_url("https://www.bbb.org/search?find_text=Example+Builders")
-    assert not adapter.allowed_url("https://example.com/search")
+
+    catalog = next(source for source in SOURCE_CATALOG if source["key"] == "bbb")
+    assert catalog["status"] == "Blocked before parsing"
+    assert "access challenge" in catalog["note"]
+    assert "robots" in catalog["note"].lower()
