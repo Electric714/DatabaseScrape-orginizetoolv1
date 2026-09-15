@@ -8,6 +8,7 @@ from lxml import etree
 
 from .bbb_adapter import (
     BBB_BASE,
+    BBB_SEARCH_ENDPOINT,
     BbbComplaintsAdapter,
     _candidate_name_from_slug,
     _is_complaints_url,
@@ -134,7 +135,7 @@ class BbbSitemapComplaintsAdapter(BbbComplaintsAdapter):
         if parts.path == urlsplit(BBB_SITEMAP_INDEX).path:
             return True
         if _SITEMAP_CHILD_PATH.match(parts.path):
-            return True
+            return url in self.selected_sitemaps
         return _is_profile_url(url) or _is_complaints_url(url)
 
     def _index_links(self, text: str) -> list[str]:
@@ -219,6 +220,8 @@ class BbbSitemapComplaintsAdapter(BbbComplaintsAdapter):
     def finalize_records(self, complete: bool) -> list[dict]:
         records = super().finalize_records(complete=complete)
         for record in records:
+            if record.get("source_url") == BBB_SEARCH_ENDPOINT:
+                record["source_url"] = BBB_SITEMAP_INDEX
             extra = record.setdefault("extra", {})
             extra["discovery_method"] = "BBB-published business-profile sitemap index"
             extra["sitemap_blocks_considered"] = extra.pop("query_count", 0)
