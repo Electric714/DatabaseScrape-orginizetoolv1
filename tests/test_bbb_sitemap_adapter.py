@@ -1,3 +1,5 @@
+import json
+
 import httpx
 
 from app import bidder_master as bidder_db, database as db
@@ -7,7 +9,7 @@ from app.bbb_sitemap_adapter import (
     BbbSitemapComplaintsAdapter,
     _expanded_sitemap_numbers,
 )
-from app.bidder_schema import BIDDER_COLUMNS
+from app.bidder_schema import BIDDER_COLUMNS, bidder_row
 from app.crawler import CrawlEngine
 from app.models import SourceCreate
 
@@ -62,6 +64,7 @@ def test_seed_uses_published_sitemap_and_never_bbb_search():
     assert adapter.allowed_url(PROFILE + "/complaints")
     assert not adapter.allowed_url("https://www.bbb.org/search?find_text=Example+Builders")
     assert not adapter.allowed_url(PROFILE + "?page=2")
+    assert not adapter.allowed_url("https://www.bbb.org/sitemap-business-profiles-327.xml")
 
 
 def test_wisconsin_index_selection_is_narrow_and_includes_boundary_padding():
@@ -79,6 +82,8 @@ def test_wisconsin_index_selection_is_narrow_and_includes_boundary_padding():
     assert max(selected) == 332
     assert len(selected) == 9
     assert all("/search" not in url for url in links)
+    assert adapter.allowed_url("https://www.bbb.org/sitemap-business-profiles-327.xml")
+    assert not adapter.allowed_url("https://www.bbb.org/sitemap-business-profiles-333.xml")
 
 
 def test_sitemap_slug_only_discovers_plausible_same_state_profile():
@@ -141,10 +146,24 @@ async def test_full_sitemap_to_profile_to_complaints_flow_never_uses_search(data
 
     records = await db.search_records(source_id=source["id"])
     assert records["total"] == 1
-    record = records["items"][0]
-    assert record["better_business_bureau_complaints"] == "Y"
-    assert record["source_url"] == PROFILE + "/complaints"
-    assert record["extra"]["discovery_method"] == "BBB-published business-profile sitemap index"
+    raw = records["items"][0]
+    projected = bidder_row(raw, fallback_id=False)
+    assert projected["contractor_name"] == "EXAMPLE BUILDERS LLC"
+    assert projected["better_business_bureau_complaints"] == "Y"
+    assert raw["source_url"] == PROFILE + "/complaints"
+    extra = json.loads(raw["extra_json"])
+    assert extra["discovery_method"] == "BBB-published business-profile sitemap index"
+
+    comparison = await bidder_db.compare()
+    assert comparison["field_changes"] == 1
+    proposals = [
+        proposal for proposal in await bidder_db.list_proposals()
+        if proposal["proposal_type"] == "field_update"
+    ]
+    assert len(proposals) == 1
+    assert proposals[0]["field_name"] == "better_business_bureau_complaints"
+    assert proposals[0]["old_value"] == ""
+    assert proposals[0]["new_value"] == "Y"
 
 
 def test_unmapped_state_stays_unknown():
@@ -152,6 +171,7 @@ def test_unmapped_state_stays_unknown():
     adapter.seed_urls([bidder(state="TX")])
     record, = adapter.finalize_records(complete=True)
     assert record["better_business_bureau_complaints"] == ""
+    assert record["source_url"] == BBB_SITEMAP_INDEX
     assert record["extra"]["unsupported_selected_states"] == ["TX"]
 
 
