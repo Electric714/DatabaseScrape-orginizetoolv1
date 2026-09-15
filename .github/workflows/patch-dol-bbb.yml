@@ -1,8 +1,8 @@
 name: Patch DOL auth and BBB acquisition
 
 on:
-  push:
-    branches: [fix/dol-auth-bbb-diagnostics]
+  pull_request:
+    branches: [main]
     paths: [.github/workflows/patch-dol-bbb.yml]
 
 permissions:
@@ -13,6 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: fix/dol-auth-bbb-diagnostics
       - name: Apply documented DOL auth and BBB browser fallback
         shell: python
         run: |
@@ -238,4 +240,4 @@ async def test_builtin_osha_cannot_be_edited_deleted_or_duplicated(database):
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add app/osha_adapter.py app/main.py app/bbb_adapter.py app/crawler.py app/source_catalog.py tests/test_osha_adapter.py tests/test_dol_integration.py tests/test_bbb_integration.py README.md
           git commit -m "Fix DOL API authentication and BBB acquisition path"
-          git push
+          git push origin HEAD:fix/dol-auth-bbb-diagnostics
