@@ -1,5 +1,7 @@
 from pathlib import Path
 
+# Temporary branch-only helper. Removed before merge.
+
 
 def patch_main():
     path = Path("app/main.py")
