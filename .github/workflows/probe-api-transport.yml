@@ -1,4 +1,4 @@
-name: Probe API transport behavior
+name: Apply API key validation fixes
 
 on:
   push:
@@ -6,45 +6,31 @@ on:
       - fix/api-key-validation
     paths:
       - .github/workflows/probe-api-transport.yml
+      - scripts/apply_api_key_validation_fix.py
+      - tests/test_api_key_validation.py
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  probe:
+  apply:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python -m pip install -r requirements.txt
-      - name: Compare API endpoint variants
-        env:
-          PYTHONPATH: .
+      - name: Apply validator patch
+        run: python scripts/apply_api_key_validation_fix.py
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Run focused API integration tests
+        run: pytest -q tests/test_api_key_validation.py tests/test_sam_integration.py
+      - name: Commit production changes
         run: |
-          python - <<'PY'
-          import asyncio, httpx
-          from app.security import PublicTransport
-
-          FAKE = "synthetic-invalid-key"
-          DOL_META = "https://apiprod.dol.gov/v4/get/OSHA/inspection/json/metadata"
-          SAM_EXCLUSIONS = "https://api.sam.gov/entity-information/v4/exclusions"
-          SAM_CONTRACTS = "https://api.sam.gov/contract-awards/v1/search"
-
-          def summary(name, r):
-              text = (r.text or "").replace("\n", " ")[:500]
-              print(f"{name}: status={r.status_code} server={r.headers.get('server','')} location={r.headers.get('location','')} body={text!r}")
-
-          async def main():
-              async with httpx.AsyncClient(trust_env=False, follow_redirects=False, timeout=20) as standard:
-                  summary("DOL_META_FAKE", await standard.get(DOL_META, params={"X-API-KEY":FAKE}, headers={"Accept":"application/json"}))
-                  summary("SAM_EXCLUSIONS_FAKE", await standard.get(SAM_EXCLUSIONS, params={"api_key":FAKE,"classification":"Firm","recordStatus":"Active","page":0,"size":1}, headers={"Accept":"application/json"}))
-                  summary("SAM_CONTRACTS_FAKE", await standard.get(SAM_CONTRACTS, params={"api_key":FAKE,"limit":1,"offset":0}, headers={"Accept":"application/json"}))
-
-              async with httpx.AsyncClient(transport=PublicTransport(), trust_env=False, follow_redirects=False, timeout=20) as guarded:
-                  summary("DOL_META_GUARDED_FAKE", await guarded.get(DOL_META, headers={"X-API-KEY":FAKE,"Accept":"application/json"}))
-                  summary("SAM_CONTRACTS_GUARDED_FAKE", await guarded.get(SAM_CONTRACTS, params={"api_key":FAKE,"limit":1,"offset":0}, headers={"Accept":"application/json"}))
-
-          asyncio.run(main())
-          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/main.py app/static/app.js
+          git commit -m "Fix DOL and SAM API key validation"
+          git pull --rebase origin fix/api-key-validation
+          git push origin HEAD:fix/api-key-validation
