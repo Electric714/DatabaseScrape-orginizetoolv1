@@ -27,30 +27,24 @@ jobs:
           import asyncio, httpx
           from app.security import PublicTransport
 
-          DOL_PUBLIC = "https://apiprod.dol.gov/v4/datasets"
-          DOL_AUTH = "https://apiprod.dol.gov/v4/get/OSHA/inspection/json?limit=1&fields=activity_nr"
           FAKE = "synthetic-invalid-key"
-          SAM_VARIANTS = [
-              ("PROD", "https://api.sam.gov/entity-information/v4/exclusions"),
-              ("PROD_SLASH", "https://api.sam.gov/entity-information/v4/exclusions/"),
-              ("ALPHA", "https://api-alpha.sam.gov/entity-information/v4/exclusions"),
-              ("ALPHA_SLASH", "https://api-alpha.sam.gov/entity-information/v4/exclusions/"),
-          ]
+          DOL_META = "https://apiprod.dol.gov/v4/get/OSHA/inspection/json/metadata"
+          SAM_EXCLUSIONS = "https://api.sam.gov/entity-information/v4/exclusions"
+          SAM_CONTRACTS = "https://api.sam.gov/contract-awards/v1/search"
 
           def summary(name, r):
-              text = (r.text or "").replace("\n", " ")[:400]
+              text = (r.text or "").replace("\n", " ")[:500]
               print(f"{name}: status={r.status_code} server={r.headers.get('server','')} location={r.headers.get('location','')} body={text!r}")
 
           async def main():
               async with httpx.AsyncClient(trust_env=False, follow_redirects=False, timeout=20) as standard:
-                  summary("DOL_PUBLIC_STANDARD", await standard.get(DOL_PUBLIC))
-                  summary("DOL_AUTH_STANDARD", await standard.get(DOL_AUTH + "&X-API-KEY=" + FAKE, headers={"Accept":"application/json"}))
-                  for label, url in SAM_VARIANTS:
-                      summary("SAM_" + label, await standard.get(url, params={"api_key":FAKE,"classification":"Firm","recordStatus":"Active","page":0,"size":1}, headers={"Accept":"application/json"}))
+                  summary("DOL_META_FAKE", await standard.get(DOL_META, params={"X-API-KEY":FAKE}, headers={"Accept":"application/json"}))
+                  summary("SAM_EXCLUSIONS_FAKE", await standard.get(SAM_EXCLUSIONS, params={"api_key":FAKE,"classification":"Firm","recordStatus":"Active","page":0,"size":1}, headers={"Accept":"application/json"}))
+                  summary("SAM_CONTRACTS_FAKE", await standard.get(SAM_CONTRACTS, params={"api_key":FAKE,"limit":1,"offset":0}, headers={"Accept":"application/json"}))
 
               async with httpx.AsyncClient(transport=PublicTransport(), trust_env=False, follow_redirects=False, timeout=20) as guarded:
-                  summary("DOL_PUBLIC_GUARDED", await guarded.get(DOL_PUBLIC))
-                  summary("DOL_AUTH_GUARDED", await guarded.get(DOL_AUTH, headers={"X-API-KEY":FAKE,"Accept":"application/json"}))
+                  summary("DOL_META_GUARDED_FAKE", await guarded.get(DOL_META, headers={"X-API-KEY":FAKE,"Accept":"application/json"}))
+                  summary("SAM_CONTRACTS_GUARDED_FAKE", await guarded.get(SAM_CONTRACTS, params={"api_key":FAKE,"limit":1,"offset":0}, headers={"Accept":"application/json"}))
 
           asyncio.run(main())
           PY
