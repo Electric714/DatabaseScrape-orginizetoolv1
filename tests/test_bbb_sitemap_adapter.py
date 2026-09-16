@@ -54,6 +54,11 @@ COMPLAINTS_HTML = """
 <p>3 total complaints in the last 3 years.</p>
 <p>1 complaint closed in the last 12 months.</p></body></html>
 """
+ZERO_COMPLAINTS_HTML = """
+<html><body><h2>Customer Complaints Summary</h2>
+<p>0 total complaints in the last 3 years.</p>
+<p>0 complaints closed in the last 12 months.</p></body></html>
+"""
 
 
 def test_seed_uses_published_sitemap_and_never_bbb_search():
@@ -77,6 +82,7 @@ def test_seed_uses_published_sitemap_and_never_bbb_search():
     assert not adapter.browser_allowed_url("https://www.bbb.org/search")
     assert not adapter.browser_allowed_url(PROFILE + "?page=2")
     assert adapter.browser_respect_robots is True
+    assert adapter.fail_fast_access_errors is False
 
 
 def test_wisconsin_index_selection_is_narrow_and_includes_boundary_padding():
@@ -176,6 +182,48 @@ async def test_full_sitemap_to_profile_to_complaints_flow_never_uses_search(data
     assert proposals[0]["field_name"] == "better_business_bureau_complaints"
     assert proposals[0]["old_value"] == ""
     assert proposals[0]["new_value"] == "Y"
+
+
+def test_partial_bbb_failure_does_not_poison_unrelated_contractor_result():
+    second = bidder(
+        id="synthetic-2",
+        contractor_name="SECOND EXAMPLE CONTRACTOR LLC",
+        address_1="500 State St",
+        city="Madison",
+        zip="53703",
+    )
+    second_profile = "https://www.bbb.org/us/wi/madison/profile/general-contractor/second-example-contractor-llc-0694-2000000000"
+    second_profile_html = """
+    <html><head><script type="application/ld+json">
+    {"@type":"LocalBusiness","name":"Second Example Contractor LLC","address":{"@type":"PostalAddress",
+    "streetAddress":"500 State St","addressLocality":"Madison","addressRegion":"WI","postalCode":"53703"}}
+    </script></head><body><h1>Second Example Contractor LLC</h1><p>500 State St, Madison, WI 53703</p></body></html>
+    """
+
+    adapter = BbbSitemapComplaintsAdapter()
+    adapter.seed_urls([bidder(), second])
+    adapter.links(xml_index(range(1, 576)), BBB_SITEMAP_INDEX)
+
+    wi_numbers = _expanded_sitemap_numbers("WI")
+    for number in wi_numbers:
+        sitemap = f"https://www.bbb.org/sitemap-business-profiles-{number}.xml"
+        urls = [PROFILE, second_profile] if number == 327 else []
+        adapter.links(xml_urls(urls), sitemap)
+
+    # Both plausible profiles were discovered. The first profile succeeds but its
+    # complaints page is never delivered, simulating a 403/429/challenge. The
+    # second contractor completes normally with a confirmed zero count.
+    adapter.links(PROFILE_HTML, PROFILE)
+    adapter.links(second_profile_html, second_profile)
+    adapter.links(ZERO_COMPLAINTS_HTML, second_profile + "/complaints")
+
+    records = adapter.finalize_records(complete=False)
+    by_id = {record["bidder_id"]: record for record in records}
+    assert by_id["synthetic-1"]["better_business_bureau_complaints"] == ""
+    assert by_id["synthetic-1"]["extra"]["complete_aggregate"] is False
+    assert by_id["synthetic-2"]["better_business_bureau_complaints"] == "N"
+    assert by_id["synthetic-2"]["extra"]["complete_aggregate"] is True
+    assert by_id["synthetic-2"]["extra"]["global_scan_complete"] is False
 
 
 def test_unmapped_state_stays_unknown():
