@@ -421,13 +421,13 @@ async function saveDolApiKey(event) {
 async function openSamKeyDialog() {
   $('samKeyForm').reset();
   $('samKeyMessage').textContent = '';
-  $('samApiKeyStatus').textContent = 'Checking current SAM.gov Alpha API key status…';
+  $('samApiKeyStatus').textContent = 'Checking current SAM.gov API key status…';
   $('samKeyDialog').showModal();
   try {
     const status = await api('/api/integrations/sam');
     $('samApiKeyStatus').textContent = status.configured
-      ? 'A SAM.gov Alpha/test API key is already saved locally. Enter a new key only if you want to replace it; it will be tested before replacement.'
-      : 'No SAM.gov Alpha/test API key is saved yet. Paste the test key below; the app will validate it against the official v4 Alpha Exclusions API.';
+      ? 'A SAM.gov Public API key is already saved locally. Enter a new key only if you want to replace it; it will be tested before replacement.'
+      : 'No SAM.gov Public API key is saved yet. Paste the key below; the app will validate it against the official production APIs.';
   } catch (error) {
     $('samApiKeyStatus').textContent = 'Could not check the current SAM API key status.';
     $('samKeyMessage').textContent = error.message;
@@ -441,13 +441,13 @@ async function saveSamApiKey(event) {
   const key = $('samApiKey').value.trim();
   if (!key) return;
   button.disabled = true;
-  $('samKeyMessage').textContent = 'Testing key with the SAM.gov Alpha Exclusions API…';
+  $('samKeyMessage').textContent = 'Testing key with the SAM.gov production API…';
   try {
     const result = await api('/api/integrations/sam', {method:'POST', body:JSON.stringify({api_key:key})});
-    if (!result.validated) throw new Error('SAM.gov Alpha API key could not be validated.');
+    if (!result.validated) throw new Error('SAM.gov API key could not be validated.');
     $('samKeyDialog').close();
     $('samKeyForm').reset();
-    notify('SAM.gov Alpha API key tested and saved locally. Federal debarment collection is ready.');
+    notify(result.warning || 'SAM.gov API key tested and saved locally. Federal debarment collection is ready.');
     state.sourceSignature = '';
     await refreshAll();
   } catch (error) {

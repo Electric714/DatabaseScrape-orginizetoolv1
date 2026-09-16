@@ -166,7 +166,7 @@
   <h2 id="samKeyDialogTitle">Set the SAM.gov API key.</h2>
   <p class="modal-intro">Federal debarment uses the official SAM.gov Exclusions API v4 production endpoint. Paste your SAM.gov Public API Key here; the app will test it before saving it locally.</p>
   <form id="samKeyForm">
-    <label>SAM.gov Alpha/test API key<input id="samApiKey" type="password" required maxlength="512" autocomplete="new-password" placeholder="Paste SAM.gov test API key"></label>
+    <label>SAM.gov Public API key<input id="samApiKey" type="password" required maxlength="512" autocomplete="new-password" placeholder="Paste SAM.gov Public API key"></label>
     <p id="samApiKeyStatus" class="setup-note">The key is stored only on this computer under .runtime. It is injected into SAM requests at fetch time and is never written to source URLs, GitHub, bidder exports, or activity logs.</p>
     <div id="samKeyMessage" class="form-message" role="status"></div>
     <div class="modal-actions"><button class="button subtle" type="button" data-close="samKeyDialog">Cancel</button><button class="button primary" type="submit" id="saveSamKey">Test &amp; save API key <span aria-hidden="true">↗</span></button></div>
