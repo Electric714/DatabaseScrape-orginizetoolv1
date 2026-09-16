@@ -162,7 +162,7 @@ async def ensure_builtin_bbb_source() -> dict:
         "max_pages": 5000,
         "max_depth": 5,
         "concurrency": 1,
-        "delay_ms": 500,
+        "delay_ms": 2000,
         "render_mode": "http",
         "respect_robots": True,
     }

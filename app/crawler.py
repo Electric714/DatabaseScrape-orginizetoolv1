@@ -28,6 +28,17 @@ TRACKING_PARAMS = {"utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_
 CHALLENGE = re.compile(r"captcha|verify (?:that )?you are human|checking your browser|access denied|cf-chl-|challenge-platform", re.I)
 
 
+def _has_access_challenge(text: str) -> bool:
+    """Detect actual block/challenge documents without scanning arbitrary user text.
+
+    Generic phrases such as ``access denied`` and ``captcha`` can legitimately
+    occur in BBB complaint narratives. Real WAF/challenge pages identify
+    themselves near the beginning of the document, so human-readable challenge
+    phrases are intentionally limited to the first 32 KiB.
+    """
+    return bool(CHALLENGE.search((text or "")[:32768]))
+
+
 def canonicalize_url(url: str) -> str:
     if not url:
         return ""
@@ -108,7 +119,7 @@ class BrowserRenderer:
                     for cookie in await self.context.cookies(request.url):
                         client.cookies.set(cookie["name"], cookie["value"], domain=cookie["domain"], path=cookie["path"])
                     result = await self.engine._http_fetch_with_retry(client, request.url, {}, redirects=False)
-                    if result.status >= 400 or CHALLENGE.search(result.text):
+                    if result.status >= 400 or _has_access_challenge(result.text):
                         raise ValueError(f"Browser resource denied: HTTP {result.status}")
                     headers = {k: v for k, v in result.headers.items() if k not in {"content-encoding", "content-length", "transfer-encoding"}}
                     if "content-type" in headers:
@@ -394,7 +405,7 @@ class CrawlEngine:
             if not isinstance(decoded, str):
                 raise ValueError("Source adapter body decoder must return text")
             result.text = decoded
-        if CHALLENGE.search(result.text):
+        if _has_access_challenge(result.text):
             raise ValueError("Explicit access challenge detected; no rendering attempted")
         digest_source = result.body if decoder else result.text.encode()
         digest = hashlib.sha256(digest_source).hexdigest()
@@ -479,7 +490,7 @@ class CrawlEngine:
             return result
         if getattr(self.adapter, "decode_body", None):
             return result
-        if result.status == 200 and not CHALLENGE.search(result.text) and (
+        if result.status == 200 and not _has_access_challenge(result.text) and (
             self.render_mode == "browser" or self.render_mode == "auto" and self._looks_dynamic(result.text)
         ):
             activity.emit("INFO", "Rendering JavaScript page", job_id=self.job_id, url=result.url)
@@ -590,7 +601,7 @@ class CrawlEngine:
         result = await self._http_fetch_with_retry(client, urljoin(self.start_url, "/robots.txt"), {}, robots=False)
         if result.status in {404, 410}:
             return
-        if result.status != 200 or CHALLENGE.search(result.text):
+        if result.status != 200 or _has_access_challenge(result.text):
             raise ValueError(f"Cannot establish robots.txt policy: HTTP {result.status}")
         parser = RobotFileParser()
         parser.parse(result.text.splitlines())
