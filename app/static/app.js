@@ -5,7 +5,7 @@ const state = {sources: [], sourceSignature: '', jobsSignature: '', events: [], 
 const OSHA_HOSTS = new Set(['www.osha.gov', 'apiprod.dol.gov', 'api.dol.gov']);
 const OSHA_API_URL = 'https://apiprod.dol.gov/v4/get/OSHA/inspection/json';
 const SAM_HOSTS = new Set(['sam.gov', 'www.sam.gov', 'api.sam.gov', 'api-alpha.sam.gov']);
-const SAM_API_URL = 'https://api-alpha.sam.gov/entity-information/v4/exclusions';
+const SAM_API_URL = 'https://api.sam.gov/entity-information/v4/exclusions';
 const BBB_HOSTS = new Set(['bbb.org', 'www.bbb.org']);
 const BBB_URL = 'https://www.bbb.org/search';
 const PAGE_SIZE = 50;
@@ -116,7 +116,7 @@ async function loadSources() {
     }
     if (isSam) {
       const keyState = samStatus.configured ? 'API key configured' : 'API key required';
-      return '<article class="source-row"><div class="source-avatar" aria-hidden="true">' + (index + 1) + '</div><div class="source-info"><h3>SAM.gov Federal Debarment / Exclusions</h3><a class="source-url" href="' + SAM_API_URL + '" target="_blank" rel="noreferrer">' + SAM_API_URL + '</a><div class="source-details"><span class="tag ' + (samStatus.configured ? 'completed' : 'partial') + '">' + keyState + '</span><span>Built-in REST source · Alpha/test v4</span><span>· ' + esc(humanDate(s.last_scan_at)) + '</span></div></div><div class="source-controls"><button class="settings-button" data-sam-key>Set test API key</button><button class="scan-button" data-scan="' + s.id + '"' + (running || !samStatus.configured ? ' disabled' : '') + '>' + (running ? 'Collecting…' : 'Collect federal debarment') + '</button><button class="icon-button" data-full="' + s.id + '" aria-label="Recollect SAM federal debarment API records" title="Recollect SAM Alpha API records, ignoring cached responses"' + (running || !samStatus.configured ? ' disabled' : '') + '>↻</button></div></article>';
+      return '<article class="source-row"><div class="source-avatar" aria-hidden="true">' + (index + 1) + '</div><div class="source-info"><h3>SAM.gov Federal Debarment / Exclusions</h3><a class="source-url" href="' + SAM_API_URL + '" target="_blank" rel="noreferrer">' + SAM_API_URL + '</a><div class="source-details"><span class="tag ' + (samStatus.configured ? 'completed' : 'partial') + '">' + keyState + '</span><span>Built-in REST source · Production v4</span><span>· ' + esc(humanDate(s.last_scan_at)) + '</span></div></div><div class="source-controls"><button class="settings-button" data-sam-key>Set API key</button><button class="scan-button" data-scan="' + s.id + '"' + (running || !samStatus.configured ? ' disabled' : '') + '>' + (running ? 'Collecting…' : 'Collect federal debarment') + '</button><button class="icon-button" data-full="' + s.id + '" aria-label="Recollect SAM federal debarment API records" title="Recollect SAM production API records, ignoring cached responses"' + (running || !samStatus.configured ? ' disabled' : '') + '>↻</button></div></article>';
     }
     if (isBbb) {
       return '<article class="source-row"><div class="source-avatar" aria-hidden="true">' + (index + 1) + '</div><div class="source-info"><h3>BBB Business Profiles / Complaints</h3><a class="source-url" href="' + BBB_URL + '" target="_blank" rel="noreferrer">' + BBB_URL + '</a><div class="source-details"><span class="tag completed">Parser · ' + esc(s.last_status || 'Not tested locally') + '</span><span>Targeted company/location matching</span><span>· ' + esc(humanDate(s.last_scan_at)) + '</span></div></div><div class="source-controls"><button class="scan-button" data-scan="' + s.id + '"' + (running ? ' disabled' : '') + '>' + (running ? 'Collecting…' : 'Collect BBB complaints') + '</button><button class="icon-button" data-full="' + s.id + '" aria-label="Recollect BBB complaint records" title="Recollect BBB profiles and complaint summaries, ignoring cached responses"' + (running ? ' disabled' : '') + '>↻</button></div></article>';
@@ -421,13 +421,13 @@ async function saveDolApiKey(event) {
 async function openSamKeyDialog() {
   $('samKeyForm').reset();
   $('samKeyMessage').textContent = '';
-  $('samApiKeyStatus').textContent = 'Checking current SAM.gov Alpha API key status…';
+  $('samApiKeyStatus').textContent = 'Checking current SAM.gov API key status…';
   $('samKeyDialog').showModal();
   try {
     const status = await api('/api/integrations/sam');
     $('samApiKeyStatus').textContent = status.configured
-      ? 'A SAM.gov Alpha/test API key is already saved locally. Enter a new key only if you want to replace it; it will be tested before replacement.'
-      : 'No SAM.gov Alpha/test API key is saved yet. Paste the test key below; the app will validate it against the official v4 Alpha Exclusions API.';
+      ? 'A SAM.gov Public API key is already saved locally. Enter a new key only if you want to replace it; it will be tested before replacement.'
+      : 'No SAM.gov Public API key is saved yet. Paste the key below; the app will validate it against the official production APIs.';
   } catch (error) {
     $('samApiKeyStatus').textContent = 'Could not check the current SAM API key status.';
     $('samKeyMessage').textContent = error.message;
@@ -441,13 +441,13 @@ async function saveSamApiKey(event) {
   const key = $('samApiKey').value.trim();
   if (!key) return;
   button.disabled = true;
-  $('samKeyMessage').textContent = 'Testing key with the SAM.gov Alpha Exclusions API…';
+  $('samKeyMessage').textContent = 'Testing key with the SAM.gov production API…';
   try {
     const result = await api('/api/integrations/sam', {method:'POST', body:JSON.stringify({api_key:key})});
-    if (!result.validated) throw new Error('SAM.gov Alpha API key could not be validated.');
+    if (!result.validated) throw new Error('SAM.gov API key could not be validated.');
     $('samKeyDialog').close();
     $('samKeyForm').reset();
-    notify('SAM.gov Alpha API key tested and saved locally. Federal debarment collection is ready.');
+    notify(result.warning || 'SAM.gov API key tested and saved locally. Federal debarment collection is ready.');
     state.sourceSignature = '';
     await refreshAll();
   } catch (error) {
