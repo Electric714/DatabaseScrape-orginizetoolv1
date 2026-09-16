@@ -1,4 +1,4 @@
-name: Apply API key validation fixes
+name: Apply API key UI cleanup
 
 on:
   push:
@@ -6,8 +6,7 @@ on:
       - fix/api-key-validation
     paths:
       - .github/workflows/probe-api-transport.yml
-      - scripts/apply_api_key_validation_fix.py
-      - tests/test_api_key_validation.py
+      - scripts/fix_api_key_ui_labels.py
 
 permissions:
   contents: write
@@ -20,17 +19,17 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Apply validator patch
-        run: python scripts/apply_api_key_validation_fix.py
+      - name: Apply UI cleanup
+        run: python scripts/fix_api_key_ui_labels.py
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
       - name: Run focused API integration tests
         run: pytest -q tests/test_api_key_validation.py tests/test_sam_integration.py
-      - name: Commit production changes
+      - name: Commit UI cleanup
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add app/main.py app/static/app.js
-          git commit -m "Fix DOL and SAM API key validation"
+          git add app/static/app.js app/static/index.html
+          git commit -m "Use production SAM API key wording"
           git pull --rebase origin fix/api-key-validation
           git push origin HEAD:fix/api-key-validation
