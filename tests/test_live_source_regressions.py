@@ -41,13 +41,14 @@ async def test_dol_api_key_moves_to_documented_query_parameter_at_egress(monkeyp
     assert "synthetic-dol-key" not in str(response.url)
 
 
-def test_bbb_stays_fail_closed_until_supported_acquisition_is_validated():
+def test_legacy_bbb_search_stays_fail_closed_while_sitemap_acquisition_is_current():
     adapter = adapter_for_url("https://www.bbb.org/search")
     assert isinstance(adapter, BbbComplaintsAdapter)
     assert not getattr(adapter, "direct_browser", False)
     assert adapter.fail_fast_access_errors is True
 
     catalog = next(source for source in SOURCE_CATALOG if source["key"] == "bbb")
-    assert catalog["status"] == "Blocked before parsing"
-    assert "access challenge" in catalog["note"]
-    assert "robots" in catalog["note"].lower()
+    assert catalog["status"] == "Sitemap discovery verified; local profile access needs validation"
+    assert "sitemap" in catalog["note"].lower()
+    assert "/search is never used" in catalog["note"]
+    assert "challenge" in catalog["note"].lower()
