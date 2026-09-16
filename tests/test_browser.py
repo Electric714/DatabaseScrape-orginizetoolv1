@@ -52,46 +52,41 @@ def test_live_gui_smoke(database, monkeypatch):
                 page.on("pageerror", lambda error: errors.append(str(error)))
                 page.goto(f"http://127.0.0.1:{port}")
                 from playwright.sync_api import expect
-                expect(page.locator("#uploadCsvButton")).to_be_visible()
-                expect(page.locator("#uploadCsvButton")).to_have_text("Upload master CSV")
-                assert page.locator("#sourceSection").count() == 1
+
+                expect(page.locator("#deskPageTitle")).to_have_text("Dashboard")
+                expect(page.locator('[data-view-link="dashboard"]')).to_have_class("nav-link active")
+                expect(page.locator("#dashboardSection")).to_be_visible()
+                expect(page.locator("#recordsSection")).to_be_hidden()
+
+                page.locator('[data-view-link="settings"]').click()
+                expect(page.locator("#deskPageTitle")).to_have_text("Settings")
                 expect(page.locator("#oshaApiKeyButton")).to_be_visible()
                 expect(page.locator("#oshaApiKeyButton")).to_have_text("Set OSHA API key")
                 expect(page.locator("#samApiKeyButton")).to_be_visible()
                 expect(page.locator("#samApiKeyButton")).to_have_text("Set SAM API key")
+                page.locator("#oshaApiKeyButton").click()
+                expect(page.locator("#dolKeyDialog")).to_be_visible()
+                expect(page.get_by_role("button", name="Test & save API key")).to_be_visible()
+                page.locator("#dolKeyDialog [data-close='dolKeyDialog']").last.click()
+                page.locator("#samApiKeyButton").click()
+                expect(page.locator("#samKeyDialog")).to_be_visible()
+                expect(page.locator("#saveSamKey")).to_be_visible()
+                page.locator("#samKeyDialog [data-close='samKeyDialog']").last.click()
+
+                page.locator('[data-view-link="sources"]').click()
+                assert page.locator("#sourceSection").count() == 1
                 expect(page.get_by_role("heading", name="OSHA / DOL Enforcement API")).to_be_visible()
                 expect(page.locator("[data-dol-key]")).to_be_visible()
                 expect(page.get_by_role("button", name="Collect OSHA", exact=True)).to_be_disabled()
-                page.locator("[data-dol-key]").click()
-                expect(page.locator("#dolKeyDialog")).to_be_visible()
-                expect(page.get_by_role("button", name="Test & save API key")).to_be_visible()
-                page.get_by_role("button", name="Cancel").last.click()
                 expect(page.get_by_role("heading", name="SAM.gov Federal Debarment / Exclusions")).to_be_visible()
                 expect(page.get_by_role("button", name="Collect federal debarment", exact=True)).to_be_disabled()
                 expect(page.get_by_role("heading", name="BBB Business Profiles / Complaints")).to_be_visible()
                 expect(page.get_by_role("button", name="Collect BBB complaints", exact=True)).to_be_enabled()
                 expect(page.get_by_role("heading", name="Minnesota OSP debarment")).to_be_visible()
-                page.locator("#samApiKeyButton").click()
-                expect(page.locator("#samKeyDialog")).to_be_visible()
-                expect(page.locator("#saveSamKey")).to_be_visible()
-                page.locator("#samKeyDialog [data-close='samKeyDialog']").last.click()
-                table_layout = page.evaluate("""() => {
-                    const wrap = document.querySelector('.bidder-table-wrap');
-                    const table = document.querySelector('.bidder-table');
-                    const first = table.querySelector('th:nth-child(1)');
-                    const second = table.querySelector('th:nth-child(2)');
-                    return {
-                        layout: getComputedStyle(table).tableLayout,
-                        scrollWidth: wrap.scrollWidth,
-                        clientWidth: wrap.clientWidth,
-                        firstWidth: first.getBoundingClientRect().width,
-                        secondWidth: second.getBoundingClientRect().width
-                    };
-                }""")
-                assert table_layout["layout"] == "auto"
-                assert table_layout["scrollWidth"] > table_layout["clientWidth"] * 2
-                assert table_layout["firstWidth"] >= 80
-                assert table_layout["secondWidth"] >= 240
+
+                page.locator('[data-view-link="import"]').click()
+                expect(page.locator("#uploadCsvButton")).to_be_visible()
+                expect(page.locator("#uploadCsvButton")).to_have_text("Upload master CSV")
 
                 import csv, io
                 baseline_one = {column: "" for column in BIDDER_COLUMNS}
@@ -109,10 +104,53 @@ def test_live_gui_smoke(database, monkeypatch):
                 })
                 expect(page.locator("#masterCount")).to_have_text("2", timeout=10000)
                 expect(page.locator("#uploadCsvButton")).to_have_text("Import another CSV", timeout=10000)
-                expect(page.locator("#records")).to_contain_text("Example Builders P1", timeout=10000)
                 expect(page.locator("#researchContractors option")).to_have_count(2, timeout=10000)
-                contractor_values = page.locator("#researchContractors option").evaluate_all("options => options.map(option => option.value)")
-                page.locator("#researchContractors").select_option(contractor_values)
+                selected_count = page.locator("#researchContractors option:checked").count()
+                assert selected_count == 2
+
+                page.locator('[data-view-link="database"]').click()
+                expect(page.locator("#records")).to_contain_text("Example Builders P1", timeout=10000)
+                compact_layout = page.evaluate("""() => {
+                    const wrap = document.querySelector('.bidder-table-wrap');
+                    const table = document.querySelector('.bidder-table');
+                    const first = table.querySelector('th:nth-child(1)');
+                    const second = table.querySelector('th:nth-child(2)');
+                    return {
+                        layout: getComputedStyle(table).tableLayout,
+                        scrollWidth: wrap.scrollWidth,
+                        clientWidth: wrap.clientWidth,
+                        firstWidth: first.getBoundingClientRect().width,
+                        secondWidth: second.getBoundingClientRect().width,
+                        relatedDisplay: getComputedStyle(table.querySelector('th:nth-child(3)')).display,
+                        cityDisplay: getComputedStyle(table.querySelector('th:nth-child(5)')).display
+                    };
+                }""")
+                assert compact_layout["layout"] == "auto"
+                assert compact_layout["scrollWidth"] <= compact_layout["clientWidth"] * 1.25
+                assert compact_layout["firstWidth"] >= 90
+                assert compact_layout["secondWidth"] >= 300
+                assert compact_layout["relatedDisplay"] == "none"
+                assert compact_layout["cityDisplay"] == "table-cell"
+
+                page.locator("#toggleAllFields").click()
+                expect(page.locator("#toggleAllFields")).to_have_text("Compact view")
+                full_layout = page.evaluate("""() => {
+                    const wrap = document.querySelector('.bidder-table-wrap');
+                    const table = document.querySelector('.bidder-table');
+                    const first = table.querySelector('th:nth-child(1)');
+                    const second = table.querySelector('th:nth-child(2)');
+                    return {
+                        scrollWidth: wrap.scrollWidth,
+                        clientWidth: wrap.clientWidth,
+                        firstWidth: first.getBoundingClientRect().width,
+                        secondWidth: second.getBoundingClientRect().width,
+                        relatedDisplay: getComputedStyle(table.querySelector('th:nth-child(3)')).display
+                    };
+                }""")
+                assert full_layout["scrollWidth"] > full_layout["clientWidth"] * 2
+                assert full_layout["firstWidth"] >= 80
+                assert full_layout["secondWidth"] >= 240
+                assert full_layout["relatedDisplay"] == "table-cell"
                 sticky_positions = page.evaluate("""() => {
                     const wrap = document.querySelector('.bidder-table-wrap');
                     wrap.scrollLeft = wrap.scrollWidth;
@@ -131,25 +169,37 @@ def test_live_gui_smoke(database, monkeypatch):
                 assert sticky_positions["firstBg"] != "rgba(0, 0, 0, 0)"
                 assert sticky_positions["secondBg"] != "rgba(0, 0, 0, 0)"
 
+                page.locator('[data-view-link="sources"]').click()
                 mn_row = page.locator(".source-row").filter(has_text="Minnesota OSP debarment")
                 mn_row.get_by_role("button", name="Collect records", exact=True).click()
                 expect(page.locator("#sourceRecordCount")).to_have_text("2", timeout=15000)
+
+                page.locator('[data-view-link="comparison"]').click()
+                expect(page.locator("#compareButton")).to_be_visible()
                 page.locator("#compareButton").click()
                 expect(page.locator("#proposals")).to_contain_text("state_federal_debarment", timeout=10000)
                 expect(page.locator("#proposals")).to_contain_text("N")
                 expect(page.locator("#proposals")).to_contain_text("Y")
+                expect(page.locator("#deskChangeCount")).to_have_text("(1)")
                 page.locator("[data-apply-proposal]").first.click()
                 expect(page.locator("#pendingUpdateCount")).to_have_text("0", timeout=10000)
 
+                page.locator('[data-view-link="evidence"]').click()
+                expect(page.locator("#deskEvidenceList")).to_contain_text("Example Builders P1", timeout=10000)
+                expect(page.locator("#deskEvidenceList [data-record]")).to_be_visible()
+
+                page.locator('[data-view-link="database"]').click()
                 page.locator("#fieldFilter").select_option("contractor")
                 page.locator("#search").fill("Example Builders P1")
                 page.get_by_role("button", name="Search records", exact=True).click()
                 expect(page.locator("#records tr")).to_have_count(1)
                 expect(page.locator("#records")).to_contain_text("Example Builders P1")
+                page.locator("#toggleAllFields").click()
                 expect(page.locator("#records")).to_contain_text("Y")
                 page.locator("#clearFilters").click()
+
+                page.locator('[data-view-link="activity"]').click()
                 from app import activity
-                from playwright.sync_api import expect
                 activity.emit("ERROR", "Fixture connection error", error="Demonstration of a failed page")
                 expect(page.locator("#consoleFeed")).to_contain_text("Fixture connection error", timeout=10000)
                 page.locator('[data-log-level="ERROR"]').click()
@@ -175,12 +225,19 @@ def test_live_gui_smoke(database, monkeypatch):
                     from pathlib import Path
                     directory = Path(os.environ["UI_SCREENSHOTS"])
                     directory.mkdir(parents=True, exist_ok=True)
-                    page.evaluate("window.scrollTo(0,0)")
+                    page.locator('[data-view-link="dashboard"]').click()
                     page.screenshot(path=str(directory / "workspace-desktop.png"), full_page=True)
+                    page.locator('[data-view-link="activity"]').click()
                 page.set_viewport_size({"width": 390, "height": 844})
                 assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+                expect(page.locator("#deskMenuButton")).to_be_visible()
+                page.locator("#deskMenuButton").click()
+                expect(page.locator('.sidebar')).to_be_visible()
+                page.locator('.desk-nav-backdrop').click(position={"x": 370, "y": 100})
                 if os.getenv("UI_SCREENSHOTS"):
+                    page.locator("#deskMenuButton").click()
                     page.screenshot(path=str(directory / "workspace-mobile.png"), full_page=True)
+                    page.locator('.desk-nav-backdrop').click(position={"x": 370, "y": 100})
                 page.route("**/api/**", lambda route: route.abort())
                 expect(page.locator("#health")).to_contain_text("Reconnecting", timeout=15000)
                 with page.expect_download() as saved:
@@ -238,4 +295,3 @@ async def test_browser_internal_resource_blocked(source):
         assert all("127.0.0.1" not in url for url in requests)
     finally:
         await engine.renderer.close()
-
