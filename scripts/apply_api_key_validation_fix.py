@@ -1,5 +1,4 @@
 from pathlib import Path
-import re
 
 
 main = Path("app/main.py")
@@ -140,11 +139,10 @@ async def validate_sam_api_key(api_key: str) -> dict:
             if response.status_code == 429:
                 raise ValueError("SAM.gov rate limit reached; try the key again after the limit resets")
 
-            # The Exclusions v4 route has recently returned HTTP 404 from clean
-            # live requests even though OpenGSA still documents that exact URL.
-            # When that happens, validate only the *key* against another official
-            # SAM public API that uses the same Public API Key. This does not claim
-            # the Exclusions service is healthy; the UI receives a warning below.
+            # OpenGSA still documents this exact Exclusions v4 URL, but clean live
+            # requests currently can receive HTTP 404. If that happens, verify only
+            # the credential against another official SAM public API using the same
+            # Public API Key. Do not claim Exclusions itself is healthy.
             if response.status_code == 404 or response.status_code >= 500:
                 fallback = await client.get(
                     SAM_KEY_VALIDATION_FALLBACK,
@@ -183,6 +181,10 @@ async def validate_sam_api_key(api_key: str) -> dict:
 if old not in text:
     raise SystemExit("validator block did not match current main.py")
 text = text.replace(old, new, 1)
+text = text.replace(
+    "from .osha_adapter import DOL_INSPECTION_ENDPOINT, _rows as parse_dol_rows",
+    "from .osha_adapter import DOL_INSPECTION_ENDPOINT",
+)
 
 # Preserve validation metadata and always save the normalized value, not pasted whitespace.
 text = text.replace(
@@ -194,7 +196,7 @@ text = text.replace(
 '''async def configure_dol_integration(payload: DolApiKeyPayload):
     key = _normalized_api_key(payload.api_key)
     try:
-        validation = await validate_dol_api_key(key)
+        validation = (await validate_dol_api_key(key)) or {}
         save_dol_api_key(key)
 ''', 1)
 text = text.replace(
@@ -211,7 +213,7 @@ text = text.replace(
 '''async def configure_sam_integration(payload: SamApiKeyPayload):
     key = _normalized_api_key(payload.api_key)
     try:
-        validation = await validate_sam_api_key(key)
+        validation = (await validate_sam_api_key(key)) or {}
         save_sam_api_key(key)
 ''', 1)
 # The SAM return is the next identical compact configured/validated response.
@@ -231,13 +233,13 @@ body = body.replace("Built-in REST source · Alpha/test v4", "Built-in REST sour
 body = body.replace("Set test API key", "Set API key")
 body = body.replace("Recollect SAM Alpha API records", "Recollect SAM production API records")
 
-# Surface a successful fallback-validation warning instead of hiding it behind a generic success toast.
+# Surface a successful fallback-validation warning without treating the warning itself as an error.
 body = body.replace(
 '''    await api('/api/integrations/sam', {method: 'POST', body: JSON.stringify({api_key: key})});
     notify('SAM.gov API key tested and saved.');
 ''',
 '''    const result = await api('/api/integrations/sam', {method: 'POST', body: JSON.stringify({api_key: key})});
-    notify(result.warning || 'SAM.gov API key tested and saved.', Boolean(result.warning));
+    notify(result.warning || 'SAM.gov API key tested and saved.');
 ''', 1)
 
 if "api-alpha.sam.gov/entity-information/v4/exclusions" in body:
