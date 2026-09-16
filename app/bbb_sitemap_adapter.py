@@ -86,14 +86,16 @@ class BbbSitemapComplaintsAdapter(BbbComplaintsAdapter):
     Sitemap XML is fetched as ordinary HTTP. Only a profile/complaints document
     discovered from those sitemaps may use Chromium's normal document navigation
     on a real local run. This is not a challenge bypass: robots policy and the
-    same strict adapter URL boundary still apply, and any challenge/403 fails
-    closed as unknown.
+    same strict adapter URL boundary still apply, and any challenge/403 stays
+    unknown for the affected contractor while unrelated contractors continue.
     """
 
     canonical_start_url = BBB_SITEMAP_INDEX
     query_mode = True
     always_parse = True
-    fail_fast_access_errors = True
+    # BBB can selectively challenge or throttle an individual profile. Do not let
+    # one inaccessible business page abort every other contractor in the run.
+    fail_fast_access_errors = False
     ignore_robots = False
     browser_respect_robots = True
 
@@ -103,6 +105,12 @@ class BbbSitemapComplaintsAdapter(BbbComplaintsAdapter):
         self.sitemap_contexts: dict[str, list[str]] = defaultdict(list)
         self.selected_sitemaps: set[str] = set()
         self.unsupported_states: set[str] = set()
+        # Successful-page tracking lets finalization decide completeness per
+        # contractor instead of treating one page error as a failure for all.
+        self.index_processed = False
+        self.processed_sitemaps: set[str] = set()
+        self.processed_profiles: set[str] = set()
+        self.processed_complaints: set[str] = set()
 
     def seed_urls(self, master_rows: list[dict]) -> list[str]:
         # Reuse mature bidder/alias normalization, then discard the legacy
@@ -114,6 +122,10 @@ class BbbSitemapComplaintsAdapter(BbbComplaintsAdapter):
         self.sitemap_contexts.clear()
         self.selected_sitemaps.clear()
         self.unsupported_states.clear()
+        self.index_processed = False
+        self.processed_sitemaps.clear()
+        self.processed_profiles.clear()
+        self.processed_complaints.clear()
 
         for key, contractor in self.contractors.items():
             state = _string(contractor.get("state")).upper()
@@ -223,13 +235,63 @@ class BbbSitemapComplaintsAdapter(BbbComplaintsAdapter):
     def links(self, html: str, url: str) -> list[str]:
         parts = urlsplit(url)
         if parts.path == urlsplit(BBB_SITEMAP_INDEX).path:
-            return self._index_links(html)
+            links = self._index_links(html)
+            self.index_processed = True
+            return links
         if _SITEMAP_CHILD_PATH.match(parts.path):
-            return self._sitemap_profile_links(html, url)
+            links = self._sitemap_profile_links(html, url)
+            self.processed_sitemaps.add(url)
+            return links
+        if _is_complaints_url(url):
+            links = super().links(html, url)
+            self.processed_complaints.add(_profile_base(url))
+            return links
+        if _is_profile_url(url):
+            links = super().links(html, url)
+            self.processed_profiles.add(_profile_base(url))
+            return links
         return super().links(html, url)
 
+    def _derive_incomplete_contractors(self) -> set[str]:
+        """Identify only contractors whose own BBB evidence path was incomplete."""
+        incomplete: set[str] = set(self.incomplete_queries)
+        if not self.index_processed:
+            incomplete.update(self.contractors)
+            return incomplete
+
+        # Every selected state sitemap for the contractor must have parsed.
+        for key in self.contractors:
+            expected = set(self.query_urls.get(key) or [])
+            if expected and not expected.issubset(self.processed_sitemaps):
+                incomplete.add(key)
+
+        # A plausible sitemap candidate that could not be opened is unknown, not
+        # evidence that the contractor has no BBB profile or complaints.
+        for profile, contexts in self.profile_contexts.items():
+            if profile not in self.processed_profiles:
+                incomplete.update(contexts)
+
+        # Once a profile is accepted as the contractor, its complaint summary
+        # must parse successfully before a zero-complaint conclusion is allowed.
+        for key, profiles in self.matched_profiles.items():
+            for profile in profiles:
+                profile_url = _profile_base(profile)
+                summary = self.complaint_summaries.get(profile_url, {})
+                if (
+                    profile_url not in self.processed_complaints
+                    or not summary
+                    or not summary.get("summary_parsed")
+                ):
+                    incomplete.add(key)
+        return incomplete
+
     def finalize_records(self, complete: bool) -> list[dict]:
-        records = super().finalize_records(complete=complete)
+        # The crawler-level complete flag is intentionally not applied to every
+        # contractor. A single BBB 403/429/challenge should not erase valid data
+        # for unrelated contractors. Successful-page tracking above determines
+        # completeness separately for each contractor and still fails closed.
+        self.incomplete_queries.update(self._derive_incomplete_contractors())
+        records = super().finalize_records(complete=self.index_processed)
         for record in records:
             if record.get("source_url") == BBB_SEARCH_ENDPOINT:
                 record["source_url"] = BBB_SITEMAP_INDEX
@@ -239,6 +301,8 @@ class BbbSitemapComplaintsAdapter(BbbComplaintsAdapter):
             extra["sitemap_blocks_considered"] = extra.pop("query_count", 0)
             extra["supported_sitemap_states"] = sorted(BBB_STATE_SITEMAP_RANGES)
             extra["unsupported_selected_states"] = sorted(self.unsupported_states)
+            extra["global_scan_complete"] = bool(complete)
+            extra["resilient_partial_collection"] = True
             narrative = _string(extra.get("narrative"))
             narrative = narrative.replace(
                 "after the targeted company/location search",
