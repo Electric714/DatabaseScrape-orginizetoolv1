@@ -19,6 +19,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Fix patch runner alias
+        run: python scripts/fix_reliability_patch.py
       - name: Apply hardening edits
         run: python scripts/apply_reliability_hardening.py
       - name: Commit hardening
