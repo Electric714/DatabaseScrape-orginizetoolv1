@@ -28,6 +28,17 @@ TRACKING_PARAMS = {"utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_
 CHALLENGE = re.compile(r"captcha|verify (?:that )?you are human|checking your browser|access denied|cf-chl-|challenge-platform", re.I)
 
 
+def _has_access_challenge(text: str) -> bool:
+    """Detect block/challenge documents without scanning arbitrary user content.
+
+    Human-readable challenge terms are limited to the beginning of a document.
+    BBB complaint pages can contain customer-written phrases such as "captcha"
+    or "access denied" deep in normal content; those must not turn evidence into
+    a false blocked outcome.
+    """
+    return bool(CHALLENGE.search((text or "")[:32768]))
+
+
 def canonicalize_url(url: str) -> str:
     if not url:
         return ""
@@ -108,7 +119,7 @@ class BrowserRenderer:
                     for cookie in await self.context.cookies(request.url):
                         client.cookies.set(cookie["name"], cookie["value"], domain=cookie["domain"], path=cookie["path"])
                     result = await self.engine._http_fetch_with_retry(client, request.url, {}, redirects=False)
-                    if result.status >= 400 or CHALLENGE.search(result.text):
+                    if result.status >= 400 or _has_access_challenge(result.text):
                         raise ValueError(f"Browser resource denied: HTTP {result.status}")
                     headers = {k: v for k, v in result.headers.items() if k not in {"content-encoding", "content-length", "transfer-encoding"}}
                     if "content-type" in headers:
@@ -429,6 +440,16 @@ class CrawlEngine:
             activity.emit("ERROR", "Page could not be processed", source_id=self.source_id, job_id=self.job_id, url=url, error=safe_error)
             await db.increment_job(self.job_id, errors=1)
             await db.upsert_page(self.source_id, url, last_error=safe_error[:1000])
+            record_page_error = getattr(self.adapter, "record_page_error", None)
+            if record_page_error:
+                try:
+                    record_page_error(url, safe_error)
+                except Exception as adapter_exc:
+                    activity.emit(
+                        "WARNING", "Source adapter could not record page failure provenance",
+                        source_id=self.source_id, job_id=self.job_id, url=url,
+                        error=activity.redact(str(adapter_exc)),
+                    )
             if getattr(self.adapter, "fail_fast_access_errors", False) and (
                 "HTTP 401" in safe_error or "HTTP 403" in safe_error or "HTTP 429" in safe_error
                 or "access challenge" in safe_error.lower()
@@ -457,7 +478,7 @@ class CrawlEngine:
             if not isinstance(decoded, str):
                 raise ValueError("Source adapter body decoder must return text")
             result.text = decoded
-        if CHALLENGE.search(result.text):
+        if _has_access_challenge(result.text):
             raise ValueError("Explicit access challenge detected; no rendering attempted")
         digest_source = result.body if decoder else result.text.encode()
         digest = hashlib.sha256(digest_source).hexdigest()
@@ -542,7 +563,7 @@ class CrawlEngine:
             return result
         if getattr(self.adapter, "decode_body", None):
             return result
-        if result.status == 200 and not CHALLENGE.search(result.text) and (
+        if result.status == 200 and not _has_access_challenge(result.text) and (
             self.render_mode == "browser" or self.render_mode == "auto" and self._looks_dynamic(result.text)
         ):
             activity.emit("INFO", "Rendering JavaScript page", job_id=self.job_id, url=result.url)
@@ -669,7 +690,7 @@ class CrawlEngine:
         result = await self._http_fetch_with_retry(client, urljoin(self.start_url, "/robots.txt"), {}, robots=False)
         if result.status in {404, 410}:
             return
-        if result.status != 200 or CHALLENGE.search(result.text):
+        if result.status != 200 or _has_access_challenge(result.text):
             raise ValueError(f"Cannot establish robots.txt policy: HTTP {result.status}")
         parser = RobotFileParser()
         parser.parse(result.text.splitlines())

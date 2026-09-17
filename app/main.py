@@ -904,14 +904,14 @@ def spreadsheet_text(value):
 
 async def ensure_poc_sources():
     sources = await db.list_sources()
-    for name, url in [
-        ("Violation Tracker", VT_URL),
-        ("Minnesota OSP debarment", MN_URL),
-        ("Illinois public works debarment", IL_URL),
-        ("Wisconsin DOT debarment", WI_URL),
+    for name, url, max_pages in [
+        ("Violation Tracker", VT_URL, 5000),
+        ("Minnesota OSP debarment", MN_URL, 50),
+        ("Illinois public works debarment", IL_URL, 50),
+        ("Wisconsin DOT debarment", WI_URL, 50),
     ]:
         if not any(s["start_url"] == url for s in sources):
-            await db.create_source(SourceCreate(name=name, start_url=url, concurrency=1, delay_ms=1500, max_depth=8, max_pages=50, render_mode="http", respect_robots=True).model_dump(mode="json"))
+            await db.create_source(SourceCreate(name=name, start_url=url, concurrency=1, delay_ms=1500, max_depth=8, max_pages=max_pages, render_mode="http", respect_robots=True).model_dump(mode="json"))
 
 
 @app.get("/api/source-catalog")
