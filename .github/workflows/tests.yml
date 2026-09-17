@@ -38,6 +38,8 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+      - name: Frontend JavaScript syntax check
+        run: node --check app/static/app.js
       - run: pip install -r requirements.txt
       - run: python -m playwright install --with-deps chromium
       - run: pytest -q

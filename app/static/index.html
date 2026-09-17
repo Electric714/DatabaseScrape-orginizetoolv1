@@ -3,185 +3,139 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="theme-color" content="#143d42">
-  <title>Paralegal Database Tool · Bidder research and updates</title>
+  <meta name="theme-color" content="#123f45">
+  <title>Paralegal Research Desk</title>
   <link rel="icon" href="/static/mark.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/styles.css">
+  <script src="/static/app.js" defer></script>
 </head>
-<body>
-<a class="skip-link" href="#recordsSection">Skip to local records</a>
-<div class="ambient" aria-hidden="true"></div>
-<aside class="sidebar">
-  <a class="brand" href="#workspace"><img src="/static/mark.svg" alt="" width="40" height="40"><span>Paralegal<br><strong>Database Tool</strong></span></a>
-  <div class="workspace-label">DATABASE WORKSPACE</div>
-  <nav aria-label="Research navigation">
-    <a href="#recordsSection" class="nav-link active"><span class="nav-icon" aria-hidden="true">⌕</span> Local records</a>
-    <a href="#sourceSection" class="nav-link"><span class="nav-icon" aria-hidden="true">◎</span> Research sites <span id="navSources" class="nav-count">0/6</span></a>
-    <a href="#scanSection" class="nav-link"><span class="nav-icon" aria-hidden="true">▤</span> Collection history</a>
-    <a href="#consoleSection" class="nav-link"><span class="nav-icon" aria-hidden="true">⌘</span> Activity console</a>
+<body data-active-view="dashboard">
+<a class="skip-link" href="#mainContent">Skip to main content</a>
+<button class="desk-nav-backdrop" type="button" aria-label="Close navigation"></button>
+<aside class="sidebar" aria-label="Workspace navigation">
+  <a class="brand" href="#dashboard"><img src="/static/mark.svg" alt="" width="44" height="44"><span>Paralegal<br><strong>Research Desk</strong></span></a>
+  <div class="workspace-label">CONTRACTOR DUE-DILIGENCE</div>
+  <nav aria-label="Research desk">
+    <a href="#dashboard" class="nav-link active" data-view-link="dashboard" aria-current="page"><span class="nav-icon" aria-hidden="true">▦</span>Dashboard</a>
+    <a href="#database" class="nav-link" data-view-link="database"><span class="nav-icon" aria-hidden="true">▤</span>Bidder database</a>
+    <a href="#import" class="nav-link" data-view-link="import"><span class="nav-icon" aria-hidden="true">⇧</span>Import</a>
+    <a href="#research" class="nav-link" data-view-link="research"><span class="nav-icon" aria-hidden="true">⌕</span>Research</a>
+    <a href="#comparison" class="nav-link" data-view-link="comparison"><span class="nav-icon" aria-hidden="true">☑</span>Comparison review <span id="navPending" class="nav-count">0</span></a>
+    <a href="#evidence" class="nav-link" data-view-link="evidence"><span class="nav-icon" aria-hidden="true">▱</span>Evidence <span id="navEvidence" class="nav-count">0</span></a>
+    <a href="#sources" class="nav-link" data-view-link="sources"><span class="nav-icon" aria-hidden="true">▣</span>Sources <span id="navSources" class="nav-count">0</span></a>
+    <a href="#activity" class="nav-link" data-view-link="activity"><span class="nav-icon" aria-hidden="true">⌁</span>Activity</a>
+    <a href="#settings" class="nav-link" data-view-link="settings"><span class="nav-icon" aria-hidden="true">⚙</span>Settings</a>
   </nav>
   <div class="sidebar-bottom">
-    <div class="local-badge"><span class="status-dot"></span> Local paralegal database</div>
-    <p>Collected records are saved on this computer and remain searchable after a restart.</p>
-    <button class="help-link" id="helpButton">How to use this tool <span aria-hidden="true">↗</span></button>
-    <div class="version">DATABASE TOOL <span id="appVersion">0.6.0</span></div>
+    <div class="local-badge"><span class="status-dot"></span> Local workspace</div>
+    <p>Approved master data and collected evidence are stored separately on this computer.</p>
+    <button class="help-link" id="helpButton" type="button">How the workflow works <span aria-hidden="true">↗</span></button>
+    <div class="version">RESEARCH DESK <span id="appVersion">—</span></div>
   </div>
 </aside>
+
 <main id="workspace">
   <header class="topbar">
-    <div class="breadcrumb">Paralegal workspace <span>/</span> Database</div>
+    <button id="deskMenuButton" class="desk-menu-button" type="button" aria-label="Open navigation" aria-expanded="false">☰</button>
+    <div class="breadcrumb"><span id="deskPageTitle">Dashboard</span></div>
     <div class="topbar-actions"><span id="lastSync">Connecting…</span><span class="connection" id="health"><i></i><span>Connecting</span></span></div>
   </header>
-  <section class="hero research-hero" aria-labelledby="deskTitle">
-    <div>
-      <div class="eyebrow"><span></span> CONTRACTOR DUE-DILIGENCE DATABASE</div>
-      <h1 id="deskTitle">One approved database.<br><em>The evidence behind every update.</em></h1>
-      <p>Maintain the firm's bidder database, run targeted public-record research, compare new findings, and approve only the updates that belong in the master.</p>
-      <div class="hero-actions"><button class="button primary" id="findRecords"><span aria-hidden="true">⌕</span> Search bidder database</button><button class="button subtle" id="reviewOsha">Review OSHA findings</button></div>
-    </div>
-    <div class="research-flow" aria-label="Research workflow">
-      <span class="flow-label">YOUR WORKFLOW</span>
-      <div><span class="flow-number">1</span><p><strong>Query your research sites</strong><small>Research only selected master contractors</small></p></div>
-      <span class="flow-line" aria-hidden="true"></span>
-      <div><span class="flow-number">2</span><p><strong>Compare with the master</strong><small>Highlight source-backed field differences</small></p></div>
-      <span class="flow-line" aria-hidden="true"></span>
-      <div><span class="flow-number">3</span><p><strong>Approve database updates</strong><small>Keep the source evidence and export the master</small></p></div>
-    </div>
-  </section>
-  <section class="metrics" aria-label="Research database totals">
-    <div><span class="metric-label">Configured research sites</span><strong><span id="statSources">0</span><span class="metric-denominator"> / 6 planned</span></strong><small id="sitesHint">Site names and URLs pending</small></div>
-    <div><span class="metric-label">Master bidder records</span><strong id="statRecords">0</strong><small>Approved rows in the working bidder database</small></div>
-    <div><span class="metric-label">Changed in 24 hours</span><strong id="statChanged">0</strong><small>New or updated source information</small></div>
-    <div><span class="metric-label">Collections in progress <i class="tiny-dot"></i></span><strong id="statRunning">0</strong><small id="runningHint">Ready to collect from configured sites</small></div>
-  </section>
-  <div class="workspace-grid">
-    <div class="main-column">
-      <section class="surface records-panel" id="recordsSection" aria-labelledby="recordsTitle">
-        <div class="section-heading"><div><div class="section-kicker">MASTER / BIDDER DATABASE</div><h2 id="recordsTitle">Bidder database</h2><p id="recordCount">Search the approved master database.</p></div><div class="export-buttons" aria-label="Export approved master database"><button data-export="csv" title="Download master database as CSV">CSV</button><button data-export="xlsx" title="Download master database as Excel">Excel</button><button data-export="json" title="Download master database as JSON">JSON</button></div></div>
-        <div class="master-import-bar" id="masterImportBar">
-          <div class="master-import-copy"><span class="master-import-icon" aria-hidden="true">↑</span><div><strong>Start with the firm's existing bidder database</strong><p id="masterImportSummary">Upload the existing 30-column CSV and it becomes the approved master database used for comparisons.</p></div></div>
-          <button class="button primary master-upload-button" id="uploadCsvButton" type="button">Upload master CSV</button>
-          <input id="csvUpload" type="file" accept=".csv,text/csv" hidden>
-        </div>
-        <form id="recordSearchForm" class="research-filters" role="search" aria-label="Search the approved master bidder database">
-          <div class="search-primary"><label class="search-field"><span aria-hidden="true">⌕</span><input id="search" placeholder="Search contractor, address, DFI, WC, OSHA, courts, violations…" aria-label="Search saved bidder database" autocomplete="off"></label><button class="button primary" id="searchBtn" type="submit">Search records</button></div>
-          <div class="filter-options">
-            <label>Search in<select id="fieldFilter"><option value="all">All bidder fields</option><option value="contractor">Contractor / related companies</option><option value="address">Addresses</option><option value="compliance">Compliance / legal fields</option><option value="osha">OSHA</option><option value="dfi">DFI</option><option value="wc">Workers comp</option><option value="federal_court">Federal court</option><option value="circuit_court">Circuit court</option></select></label>
-            <label hidden>Research site<select id="sourceFilter"><option value=""></option></select></label>
-            <label hidden>OSHA status<select id="oshaFilter"><option value=""></option></select></label>
-            <button class="text-button" id="clearFilters" type="button">Clear filters</button>
-          </div>
-        </form>
-        <div class="database-note"><span aria-hidden="true">▤</span><p>The table and exports follow the law firm’s 30-column bidder database structure exactly. Source URLs, collection timestamps, and change history are still retained underneath each saved record.</p></div>
-        <div class="table-wrap bidder-table-wrap" tabindex="0" role="region" aria-label="Bidder database results; scroll horizontally for all 30 fields"><table class="bidder-table"><thead><tr><th>id</th><th>contractor_name</th><th>related_companies</th><th>address_1</th><th>city</th><th>state</th><th>zip</th><th>additional_address</th><th>additional_address_city</th><th>additional_address_state</th><th>additional_address_zip</th><th>dfi</th><th>wc</th><th>wc_date</th><th>osha_severe_violations</th><th>years</th><th>osha</th><th>state_federal_debarment</th><th>mndol_ineligibility</th><th>public_works_projects_budget_time_quality_complaint</th><th>federal_court</th><th>circuit_court</th><th>ccap_show150</th><th>environmental_violations</th><th>prevailing_wage_violations</th><th>dwd</th><th>dwd_substance_abuse_plan</th><th>better_business_bureau_complaints</th><th>misc_violations</th><th>tax_liability</th></tr></thead><tbody id="records"></tbody></table></div>
-        <div class="section-footer"><span id="pageInfo" role="status">No records yet</span><div class="pagination"><button id="prevPage" aria-label="Previous page" disabled>←</button><button id="nextPage" aria-label="Next page" disabled>→</button></div></div>
-        <p class="evidence-note">Blank cells remain unknown until a source supplies an approved value. Scraped findings never overwrite this table automatically; they appear in the review queue below first. Scroll the table horizontally to review all 30 fields.</p>
-      </section>
-      <section class="surface compare-panel" id="compareSection" aria-labelledby="compareTitle">
-        <div class="section-heading">
-          <div><div class="section-kicker">IMPORT / COMPARE / APPROVE</div><h2 id="compareTitle">Baseline database &amp; proposed updates</h2><p id="baselineStatus">Upload the existing bidder CSV to use it as the master starting database.</p></div>
-          <div class="compare-actions"><button class="button primary" id="compareButton">Compare collected data</button></div>
-        </div>
-        <div class="comparison-summary">
-          <div><span>Master contractors</span><strong id="masterCount">0</strong></div>
-          <div><span>Collected source records</span><strong id="sourceRecordCount">0</strong></div>
-          <div><span>Pending changes</span><strong id="pendingUpdateCount">0</strong></div>
-          <div><span>Last import</span><strong id="lastImport">Never</strong></div>
-        </div>
-        <div class="database-note"><span aria-hidden="true">⇄</span><p>The uploaded CSV is the approved master. <strong>Compare collected data</strong> checks scraped records against it. Old values are shown in red, newly found values in green, and nothing changes until you approve it.</p></div>
-        <div class="proposal-toolbar"><span id="proposalStatus">No proposed updates yet.</span><button class="text-button" id="refreshProposals">↻ Refresh review queue</button></div>
-        <div class="table-wrap proposal-table-wrap" tabindex="0" role="region" aria-label="Proposed bidder database updates">
-          <table class="proposal-table"><thead><tr><th>Contractor</th><th>Field</th><th>Current database value</th><th>Newly found value</th><th>Source</th><th>Decision</th></tr></thead><tbody id="proposals"><tr><td colspan="6" class="table-empty">Upload the existing CSV, collect source data, then compare it here.</td></tr></tbody></table>
-        </div>
-      </section>
-      <section class="surface sources-panel" id="sourceSection" aria-labelledby="sourcesTitle">
-        <div class="section-heading"><div><div class="section-kicker">COLLECT / TARGETED RESEARCH</div><h2 id="sourcesTitle">Your research sites <span id="sourceCount">0 / 6</span></h2><p id="siteSetupNote">OSHA/DOL, SAM.gov Federal Debarment, and BBB complaints are built in. API-backed sources use their saved keys; BBB searches only the companies in the master bidder list.</p></div><div class="source-heading-actions"><button class="button primary small" id="oshaApiKeyButton" type="button">Set OSHA API key</button><button class="button primary small" id="samApiKeyButton" type="button">Set SAM API key</button><button class="button subtle small" id="updateSites" disabled>Update configured sites</button></div></div>
-        <div class="research-selection"><label for="researchContractors">Companies to research (Ctrl/Command-click to select several)</label><select id="researchContractors" multiple size="5" aria-label="Companies to research"></select><p id="researchSelectionNote">Import a CSV, then select a few contractors for the first test.</p></div>
-        <div class="source-heading-actions"><button class="button subtle small" data-test-api="dol">Test DOL API</button><button class="button subtle small" data-test-api="sam">Test SAM API</button></div>
-        <div id="sourceCatalog"></div>
-        <div id="sources"><div class="loading-state">Loading your research sites…</div></div>
-        <div class="section-footer"><span>Collected records are saved to the local database.</span><button class="text-button" id="refreshSources">↻ Refresh status</button></div>
-      </section>
-      <section class="scan-section" id="scanSection" aria-labelledby="scanTitle">
-        <div class="section-heading compact"><div><div class="section-kicker">TRACK / COLLECTION HISTORY</div><h2 id="scanTitle">Recent collections</h2></div><span class="quiet-label">Latest 8 runs</span></div>
-        <div id="jobs" class="jobs"><div class="loading-state">Loading collection history…</div></div>
-      </section>
-    </div>
-    <aside class="console-column" id="consoleSection" aria-labelledby="consoleTitle">
-      <section class="console">
-        <div class="console-glow" aria-hidden="true"></div>
-        <div class="console-header"><div class="console-title"><span class="terminal-icon" aria-hidden="true">›_</span><div><h2 id="consoleTitle">Activity console</h2><p>Collection progress, updates, and errors.</p></div></div><span class="live-label" id="consoleLive"><i></i> LIVE</span></div>
-        <div class="console-toolbar">
-          <div class="segmented" role="group" aria-label="Filter activity level"><button class="selected" data-log-level="all" aria-pressed="true">All</button><button data-log-level="WARNING" aria-pressed="false">Warnings</button><button data-log-level="ERROR" aria-pressed="false">Errors <span id="errorCount">0</span></button></div>
-          <button id="pauseLogs" class="console-icon-button" aria-label="Pause live activity" title="Pause live activity">Ⅱ</button>
-        </div>
-        <label class="console-search"><span aria-hidden="true">⌕</span><input id="logSearch" placeholder="Search collection logs…" aria-label="Search activity logs"></label>
-        <div class="console-meta"><span id="logCount">Waiting for activity</span><button id="autoScroll" aria-pressed="true">↓ Follow latest</button></div>
-        <div class="console-feed" id="consoleFeed" tabindex="0" aria-label="Saved activity events"><div class="console-empty"><span>›_</span><strong>Ready to collect.</strong><p>Website collection, saved records, and errors<br>will appear here automatically.</p></div></div>
-        <div class="console-footer">
-          <div class="console-status"><span id="consoleNotice"><i></i> Saved automatically · up to 5,000 events</span></div>
-          <div class="console-actions"><button id="snapshotButton">⊙ Capture snapshot</button><button id="exportLogs" class="console-export">↓ Export report</button></div>
-          <p>Download a diagnostic ZIP when you need help. It includes technical logs and site paths, not your collected research records.</p>
-        </div>
-      </section>
-      <div class="workspace-note"><span aria-hidden="true">✧</span><p>Every finding needs context.<br><strong>Keep its source within reach.</strong></p></div>
-    </aside>
+
+  <div id="mainContent" class="main-content" tabindex="-1">
+    <section id="dashboardSection" class="view-section" data-view-section="dashboard" aria-labelledby="dashboardTitle">
+      <div class="desk-page-header dashboard-header">
+        <div><span class="section-kicker">LOCAL PARALEGAL RESEARCH WORKSPACE</span><h1 id="dashboardTitle">Approved truth stays separate from research evidence.</h1><p>Import the firm’s bidder database, collect outside-source evidence, review field differences, and approve only the changes that belong in the master.</p></div>
+        <div class="mental-model" aria-label="Data model"><div><strong>BIDDER DATABASE</strong><span>Approved truth</span></div><span aria-hidden="true">→</span><div><strong>EVIDENCE</strong><span>Outside-source information</span></div><span aria-hidden="true">→</span><div><strong>COMPARISON REVIEW</strong><span>Controlled bridge</span></div></div>
+      </div>
+      <div class="dashboard-grid" aria-label="Workspace status">
+        <button class="status-card master-card" type="button" data-open-view="database"><span>Approved master</span><strong><span id="dashMasterCount">0</span> contractors</strong><small>Search the values that are currently approved for export.</small></button>
+        <button class="status-card evidence-card" type="button" data-open-view="evidence"><span>Research evidence</span><strong><span id="dashEvidenceCount">0</span> records</strong><small>Inspect what outside sources returned without changing the master.</small></button>
+        <button class="status-card review-card" type="button" data-open-view="comparison"><span>Waiting for review</span><strong><span id="dashPendingCount">0</span> changes</strong><small>Approve or dismiss proposed field changes one at a time.</small></button>
+        <button class="status-card" type="button" data-open-view="activity"><span>Research running</span><strong><span id="dashRunningCount">0</span> jobs</strong><small>See active collection work and persisted job status.</small></button>
+        <button class="status-card warning-card" type="button" data-open-view="activity"><span>Recent problems</span><strong><span id="dashProblemCount">0</span> jobs</strong><small>Partial, failed, blocked, interrupted, or incomplete collection results.</small></button>
+      </div>
+      <div class="dashboard-lower">
+        <section class="surface next-actions" aria-labelledby="nextActionsTitle"><div class="section-heading"><div><span class="section-kicker">NEXT ACTIONS</span><h2 id="nextActionsTitle">Continue the workflow</h2></div></div><div id="nextActions" class="next-action-list"><button type="button" data-open-view="import"><strong>1. Import the approved master CSV</strong><span>Start or refresh the baseline.</span></button><button type="button" data-open-view="research"><strong>2. Run targeted research</strong><span>Choose contractors and sources.</span></button><button type="button" data-open-view="comparison"><strong>3. Review proposed changes</strong><span>Nothing enters the master automatically.</span></button></div></section>
+        <section class="surface dashboard-problems" aria-labelledby="recentProblemsTitle"><div class="section-heading"><div><span class="section-kicker">RECENT COLLECTION HEALTH</span><h2 id="recentProblemsTitle">Problems and incomplete scans</h2></div><button class="text-button" type="button" data-open-view="activity">Open Activity</button></div><div id="dashboardProblems" class="compact-list"><div class="empty-state">No recent collection problems are loaded.</div></div></section>
+      </div>
+    </section>
+
+    <section id="importSection" class="view-section" data-view-section="import" hidden aria-labelledby="importTitle">
+      <div class="desk-page-header"><div><span class="section-kicker">APPROVED BASELINE</span><h1 id="importTitle">Import master database</h1><p>The uploaded CSV becomes the approved baseline. Missing contractors are not automatically deleted, and research evidence remains separate.</p></div></div>
+      <div class="two-column-layout">
+        <section class="surface import-card" aria-labelledby="importCardTitle"><div class="section-heading"><div><h2 id="importCardTitle">Master CSV</h2><p id="masterImportSummary">Upload the existing 30-column bidder CSV to establish the approved master.</p></div></div><div class="import-dropzone"><span aria-hidden="true">⇧</span><div><strong>Choose the firm’s current bidder CSV</strong><p>Import updates existing matching master rows and adds approved rows from the file. It does not treat absent rows as automatic deletions.</p></div><button class="button primary" id="uploadCsvButton" type="button">Upload master CSV</button><input id="csvUpload" type="file" accept=".csv,text/csv" hidden></div><div id="importResult" class="result-panel" role="status" aria-live="polite">No import has been run in this session.</div></section>
+        <aside class="surface guardrail-card" aria-labelledby="guardrailTitle"><span class="section-kicker">IMPORT GUARDRails</span><h2 id="guardrailTitle">What remains separate</h2><div class="guardrail"><span aria-hidden="true">✓</span><p><strong>Approved master:</strong> the imported bidder values used for exports.</p></div><div class="guardrail"><span aria-hidden="true">✓</span><p><strong>Research evidence:</strong> outside-source records do not overwrite the master.</p></div><div class="guardrail"><span aria-hidden="true">✓</span><p><strong>Blank means unknown:</strong> failed or partial research never becomes a clean result.</p></div><div class="guardrail"><span aria-hidden="true">✓</span><p><strong>No research-created contractors:</strong> outside evidence cannot add a bidder to the approved master.</p></div><dl class="summary-list"><div><dt>Approved contractors</dt><dd id="masterCount">0</dd></div><div><dt>Last import</dt><dd id="lastImport">Never</dd></div><div><dt>Evidence records</dt><dd id="sourceRecordCount">0</dd></div><div><dt>Pending changes</dt><dd id="pendingUpdateCount">0</dd></div></dl><p id="baselineStatus" class="muted">Upload the existing bidder CSV to use it as the master starting database.</p></aside>
+      </div>
+    </section>
+
+    <section id="recordsSection" class="view-section compact-master" data-view-section="database" hidden aria-labelledby="recordsTitle">
+      <div class="desk-page-header"><div><span class="section-kicker master-label">APPROVED MASTER DATA</span><h1 id="recordsTitle">Bidder database</h1><p id="recordCount">Search the approved master database.</p></div><div class="desk-page-actions"><button class="button primary small" type="button" data-open-view="import">Import file</button><button class="button subtle small" type="button" id="toggleAllFields" aria-pressed="false">Show all 30 fields</button><div class="export-buttons" aria-label="Export approved master database"><button data-export="csv" title="Download approved master as CSV">CSV</button><button data-export="xlsx" title="Download approved master as Excel">Excel</button><button data-export="json" title="Download approved master as JSON">JSON</button></div></div></div>
+      <div class="approved-banner" role="note"><strong>APPROVED MASTER</strong><span>Every value shown here is approved data. Research findings appear in Evidence and Comparison review first.</span></div>
+      <form id="recordSearchForm" class="filter-bar" role="search" aria-label="Search approved bidder database"><label class="search-field"><span aria-hidden="true">⌕</span><input id="search" type="search" placeholder="Search contractor, address, OSHA, courts, violations…" aria-label="Search approved bidder database" autocomplete="off"></label><label>Search in<select id="fieldFilter"><option value="all">All bidder fields</option><option value="contractor">Contractor / related companies</option><option value="address">Addresses</option><option value="compliance">Compliance / legal fields</option><option value="osha">OSHA</option><option value="dfi">DFI</option><option value="wc">Workers comp</option><option value="federal_court">Federal court</option><option value="circuit_court">Circuit court</option></select></label><button class="button primary" id="searchBtn" type="submit">Search records</button><button class="text-button" id="clearFilters" type="button">Clear</button></form>
+      <label hidden>Research site<select id="sourceFilter"><option value=""></option></select></label><label hidden>OSHA status<select id="oshaFilter"><option value=""></option></select></label>
+      <div class="table-wrap bidder-table-wrap" tabindex="0" role="region" aria-label="Approved bidder database results"><table class="bidder-table"><thead><tr><th>id</th><th>contractor_name</th><th>related_companies</th><th>address_1</th><th>city</th><th>state</th><th>zip</th><th>additional_address</th><th>additional_address_city</th><th>additional_address_state</th><th>additional_address_zip</th><th>dfi</th><th>wc</th><th>wc_date</th><th>osha_severe_violations</th><th>years</th><th>osha</th><th>state_federal_debarment</th><th>mndol_ineligibility</th><th>public_works_projects_budget_time_quality_complaint</th><th>federal_court</th><th>circuit_court</th><th>ccap_show150</th><th>environmental_violations</th><th>prevailing_wage_violations</th><th>dwd</th><th>dwd_substance_abuse_plan</th><th>better_business_bureau_complaints</th><th>misc_violations</th><th>tax_liability</th></tr></thead><tbody id="records"><tr><td colspan="30" class="table-empty">Loading approved master…</td></tr></tbody></table></div>
+      <div class="section-footer"><span id="pageInfo" role="status">No records yet</span><div class="pagination"><button id="prevPage" type="button" aria-label="Previous bidder page" disabled>← Previous</button><button id="nextPage" type="button" aria-label="Next bidder page" disabled>Next →</button></div></div>
+    </section>
+
+    <section id="researchSection" class="view-section" data-view-section="research" hidden aria-labelledby="researchTitle">
+      <div class="desk-page-header"><div><span class="section-kicker">COLLECT EVIDENCE, NOT MASTER EDITS</span><h1 id="researchTitle">Research</h1><p>Choose approved contractors and outside sources. Running research creates evidence and job history; it does not edit the bidder database.</p></div><div class="desk-page-actions"><button class="button subtle" type="button" data-open-view="activity">View activity</button></div></div>
+      <section class="surface research-plan"><div class="section-heading"><div><h2>1. Choose contractors</h2><p>Research is limited to contractors already present in the approved master.</p></div></div><div class="choice-row" role="radiogroup" aria-label="Contractors to research"><label><input type="radio" name="deskResearchMode" value="all" checked> All contractors</label><label><input type="radio" name="deskResearchMode" value="selected"> Selected contractors</label></div><div class="research-selection" id="researchSelection"><label for="researchContractors">Approved contractors</label><select id="researchContractors" multiple size="8" aria-describedby="researchSelectionNote"></select><div class="selection-tools"><button class="text-button" type="button" id="selectAllContractors">Select all</button><button class="text-button" type="button" id="clearContractors">Clear selection</button></div><p id="researchSelectionNote" class="muted">Import a master CSV to choose contractors.</p></div></section>
+      <section class="surface research-plan"><div class="section-heading"><div><h2>2. Choose sources</h2><p>Readiness and credential requirements are shown before a run starts.</p></div><button class="text-button" type="button" data-open-view="sources">Review source coverage</button></div><div id="deskResearchSources" class="research-source-grid"><div class="loading-state">Loading research sources…</div></div></section>
+      <section class="surface research-run"><div><h2>3. Run research</h2><p id="deskResearchStatus" role="status" aria-live="polite">Choose the sources to query, then run research.</p><label class="inline-check"><input type="checkbox" id="deskBypassCache"> Bypass cached source responses for this run</label></div><button class="button primary run-button" type="button" id="deskRunResearch">Run research</button></section>
+    </section>
+
+    <section id="compareSection" class="view-section" data-view-section="comparison" hidden aria-labelledby="compareTitle">
+      <div class="desk-page-header"><div><span class="section-kicker">CURRENT MASTER / NEW RESEARCH / DECISION</span><h1 id="compareTitle">Comparison review</h1><p>Research never writes the master database. Each proposed field update requires an explicit decision.</p></div><div class="desk-page-actions"><button class="button primary" id="compareButton" type="button">Compare research with master</button></div></div>
+      <div class="comparison-summary" aria-label="Comparison totals"><div><span>Approved contractors</span><strong id="comparisonMasterCount">0</strong></div><div><span>Evidence records</span><strong id="comparisonEvidenceCount">0</strong></div><div><span>Pending decisions</span><strong id="comparisonPendingCount">0</strong></div><div><span>Comparison state</span><strong id="comparisonState">Ready</strong></div></div>
+      <div class="review-tabs" role="tablist" aria-label="Comparison review views"><button type="button" class="review-tab active" role="tab" aria-selected="true" data-review-mode="changes">Proposed changes <span id="deskChangeCount">(0)</span></button><button type="button" class="review-tab" role="tab" aria-selected="false" data-review-mode="identity">Identity review <span id="deskIdentityCount">(0)</span></button><button type="button" class="review-tab" role="tab" aria-selected="false" data-review-mode="resolved">Resolved <span id="deskResolvedCount">(0)</span></button></div>
+      <div class="proposal-toolbar"><span id="proposalStatus" role="status">No proposed updates waiting for review.</span><button class="text-button" id="refreshProposals" type="button">↻ Refresh review queue</button></div>
+      <div class="surface review-surface"><div class="table-wrap proposal-table-wrap" tabindex="0" role="region" aria-label="Comparison decisions"><table class="proposal-table"><thead><tr><th>Contractor</th><th>Field</th><th>Current approved value</th><th>New research value</th><th>Source</th><th>Evidence / context</th><th>Decision</th></tr></thead><tbody id="proposals"><tr><td colspan="7" class="table-empty">Run a comparison after research evidence has been collected.</td></tr></tbody></table></div><div id="deskReviewEmpty" class="empty-state" hidden></div></div>
+    </section>
+
+    <section id="evidenceSection" class="view-section" data-view-section="evidence" hidden aria-labelledby="evidenceTitle">
+      <div class="desk-page-header"><div><span class="section-kicker">OUTSIDE-SOURCE RECORDS</span><h1 id="evidenceTitle">Evidence</h1><p>Inspect source records independently from approved master values. Evidence remains evidence until a comparison decision is approved.</p></div></div>
+      <form class="filter-bar evidence-toolbar" id="deskEvidenceForm" role="search"><label class="search-field"><span aria-hidden="true">⌕</span><input id="deskEvidenceSearch" type="search" placeholder="Search contractor or source record" aria-label="Search evidence"></label><label>Source<select id="deskEvidenceSource" aria-label="Filter evidence by source"><option value="">All sources</option></select></label><button class="button primary" type="submit">Search evidence</button><button class="text-button" type="button" id="clearEvidenceFilters">Clear</button></form>
+      <div class="evidence-help" role="note"><strong>Evidence is not approved data.</strong><span>Source state, match basis, retrieval time, URLs, and extracted proposed fields are shown when the backend supplies them.</span></div>
+      <div class="evidence-list" id="deskEvidenceList"><div class="loading-state">Loading source evidence…</div></div>
+      <div class="section-footer"><span id="evidencePageInfo" role="status">No evidence loaded</span><div class="pagination"><button id="evidencePrevPage" type="button" disabled>← Previous</button><button id="evidenceNextPage" type="button" disabled>Next →</button></div></div>
+    </section>
+
+    <section id="sourceSection" class="view-section" data-view-section="sources" hidden aria-labelledby="sourcesTitle">
+      <div class="desk-page-header"><div><span class="section-kicker">SOURCE STATUS / FIELD OWNERSHIP</span><h1 id="sourcesTitle">Sources <span id="sourceCount" class="quiet-count">0</span></h1><p id="siteSetupNote">Each source owns specific fields. Failed, partial, blocked, or ambiguous checks remain unknown instead of becoming clean results.</p></div><div class="desk-page-actions"><button class="button subtle" type="button" id="addSourceButton">Add research site</button><button class="text-button" id="refreshSources" type="button">↻ Refresh status</button></div></div>
+      <section class="surface"><div class="section-heading"><div><h2>Coverage and limitations</h2><p>Use this catalog to understand what a source can populate and where it cannot make a conclusion.</p></div></div><div id="sourceCatalog" class="catalog-grid"><div class="loading-state">Loading source catalog…</div></div></section>
+      <section class="surface source-status-section"><div class="section-heading"><div><h2>Configured collectors</h2><p>Collection buttons operate on the contractor selection from Research.</p></div><button class="button subtle small" id="updateSites" type="button" disabled>Update ready sources</button></div><div id="sources"><div class="loading-state">Loading configured collectors…</div></div></section>
+    </section>
+
+    <section id="activitySection" class="view-section" data-view-section="activity" hidden aria-labelledby="activityTitle">
+      <div class="desk-page-header"><div><span class="section-kicker">JOBS / WARNINGS / DIAGNOSTICS</span><h1 id="activityTitle">Activity</h1><p>Running, completed, partial, failed, and interrupted research stays visible here with diagnostic events.</p></div><div class="desk-page-actions"><button class="button subtle" id="snapshotButton" type="button">Capture snapshot</button><button class="button primary" id="exportLogs" type="button">Export diagnostics</button></div></div>
+      <section id="scanSection" class="surface" aria-labelledby="scanTitle"><div class="section-heading"><div><h2 id="scanTitle">Research jobs</h2><p>Recent persisted job lifecycle and collection totals.</p></div><span class="quiet-label">Latest 20</span></div><div id="jobs" class="jobs"><div class="loading-state">Loading job history…</div></div></section>
+      <section class="console" id="consoleSection" aria-labelledby="consoleTitle"><div class="console-header"><div><span class="section-kicker light-kicker">DIAGNOSTIC EVENT LOG</span><h2 id="consoleTitle">Activity console</h2><p>Warnings, errors, collection milestones, and local browser events.</p></div><span class="live-label" id="consoleLive"><i></i> LIVE</span></div><div class="console-toolbar"><div class="segmented" role="group" aria-label="Filter activity level"><button class="selected" data-log-level="all" aria-pressed="true">All</button><button data-log-level="WARNING" aria-pressed="false">Warnings</button><button data-log-level="ERROR" aria-pressed="false">Errors <span id="errorCount">0</span></button></div><button id="pauseLogs" class="console-icon-button" type="button" aria-label="Pause live activity">Ⅱ</button></div><label class="console-search"><span aria-hidden="true">⌕</span><input id="logSearch" type="search" placeholder="Search collection logs…" aria-label="Search activity logs"></label><div class="console-meta"><span id="logCount">Waiting for activity</span><button id="autoScroll" type="button" aria-pressed="true">↓ Follow latest</button></div><div class="console-feed" id="consoleFeed" tabindex="0" aria-label="Saved activity events"><div class="console-empty"><strong>Ready to collect.</strong><p>Collection progress, warnings, and errors appear here.</p></div></div><div class="console-footer"><span id="consoleNotice">Saved automatically · up to 5,000 events</span><p>Diagnostic exports contain technical logs and site paths, not the approved bidder database.</p></div></section>
+    </section>
+
+    <section id="settingsSection" class="view-section" data-view-section="settings" hidden aria-labelledby="settingsTitle">
+      <div class="desk-page-header"><div><span class="section-kicker">LOCAL CONFIGURATION</span><h1 id="settingsTitle">Settings</h1><p>Credentials and diagnostics/help are separated. Stored API keys are never displayed back to the browser.</p></div></div>
+      <div class="settings-grid"><section class="surface setting-card"><span class="section-kicker">CREDENTIAL</span><h2>OSHA / DOL API</h2><p>The official Department of Labor integration requires a locally stored API key.</p><button class="button primary" id="oshaApiKeyButton" type="button">Set OSHA API key</button><button class="text-button" type="button" data-test-api="dol">Test configured DOL API</button></section><section class="surface setting-card"><span class="section-kicker">CREDENTIAL</span><h2>SAM.gov exclusions</h2><p>The federal exclusions integration uses a SAM.gov Public API Key stored in the local runtime folder.</p><button class="button primary" id="samApiKeyButton" type="button">Set SAM API key</button><button class="text-button" type="button" data-test-api="sam">Test configured SAM API</button></section><section class="surface setting-card"><span class="section-kicker">HELP</span><h2>Workflow guide</h2><p>Review the master → research → evidence → comparison → approval model and unknown-result guardrails.</p><button class="button subtle" id="deskOpenHelp" type="button">Open workflow help</button></section><section class="surface setting-card"><span class="section-kicker">DIAGNOSTICS</span><h2>Troubleshooting</h2><p>Warnings and errors are kept in Activity. Export a diagnostic report there when collection needs troubleshooting.</p><button class="button subtle" type="button" data-open-view="activity">Open Activity</button></section></div>
+    </section>
   </div>
-  <footer class="page-footer"><span>Paralegal Database Tool</span><span>Collect · Organize · Search · Review the source</span></footer>
+  <footer class="page-footer"><span>Paralegal Research Desk</span><span>Approved master · Separate evidence · Explicit review</span></footer>
 </main>
+
 <dialog id="sourceDialog" class="modal" aria-labelledby="sourceDialogTitle">
-  <div class="modal-top"><span class="section-kicker" id="sourceSlotLabel">SET UP A RESEARCH SITE</span><button class="close-button" data-close="sourceDialog" aria-label="Close site setup">×</button></div>
-  <h2 id="sourceDialogTitle">Add a research site.</h2><p class="modal-intro">Connect one of your public-record research websites. Records collected from it are saved locally.</p>
-  <form id="sourceForm">
-    <label>Research site name<input id="sourceName" required maxlength="120" placeholder="Enter the actual website name" autocomplete="off"></label>
-    <label>Website address<input id="sourceUrl" type="url" required placeholder="https://…" autocomplete="url"><small>Use the public listing, API, or directory endpoint you want to collect.</small></label>
-    <p class="setup-note">Adding a site configures collection. Extraction coverage will need checking against each actual source; fields the source does not provide remain unknown.</p>
-    <details class="advanced"><summary>Collection settings <span>Optional</span></summary><div class="advanced-grid">
-      <label>Page limit<input id="maxPages" type="number" min="1" max="250000" value="5000" required></label>
-      <label>Link depth<input id="maxDepth" type="number" min="0" max="100" value="12" required></label>
-      <label>Concurrent pages<input id="concurrency" type="number" min="1" max="32" value="6" required></label>
-      <label>Delay between requests (ms)<input id="delayMs" type="number" min="0" max="60000" value="350" required></label>
-      <label>Page rendering<select id="renderMode"><option value="auto">Automatic</option><option value="http">HTTP only</option><option value="browser">Browser rendering</option></select></label>
-      <label>Scheduled collection<select id="autoScan"><option value="false">Collect manually</option><option value="true">Collect automatically</option></select></label>
-      <label>Collection interval (minutes)<input id="intervalMinutes" type="number" min="5" max="10080" value="60" required></label>
-      <label>Website crawl policy<select id="respectRobots"><option value="true">Respect robots.txt</option><option value="false">Operator-authorized override</option></select></label>
-    </div></details>
-    <div id="formMessage" class="form-message" role="status"></div>
-    <div class="modal-actions"><button class="button subtle" type="button" data-close="sourceDialog">Cancel</button><button class="button primary" type="submit" id="saveSource">Save research site <span aria-hidden="true">↗</span></button></div>
-  </form>
+  <div class="modal-top"><span class="section-kicker" id="sourceSlotLabel">SET UP A RESEARCH SITE</span><button class="close-button" type="button" data-close="sourceDialog" aria-label="Close site setup">×</button></div>
+  <h2 id="sourceDialogTitle">Add a research site</h2><p class="modal-intro">Connect a public research website. Collected records remain evidence until comparison review.</p>
+  <form id="sourceForm"><label>Research site name<input id="sourceName" required maxlength="120" autocomplete="off"></label><label>Website address<input id="sourceUrl" type="url" required placeholder="https://…" autocomplete="url"></label><p class="setup-note">Only explicitly owned fields can be proposed by a source. Unsupported fields remain unknown.</p><details class="advanced"><summary>Collection settings <span>Optional</span></summary><div class="advanced-grid"><label>Page limit<input id="maxPages" type="number" min="1" max="250000" value="5000" required></label><label>Link depth<input id="maxDepth" type="number" min="0" max="100" value="12" required></label><label>Concurrent pages<input id="concurrency" type="number" min="1" max="32" value="6" required></label><label>Delay between requests (ms)<input id="delayMs" type="number" min="0" max="60000" value="350" required></label><label>Page rendering<select id="renderMode"><option value="auto">Automatic</option><option value="http">HTTP only</option><option value="browser">Browser rendering</option></select></label><label>Scheduled collection<select id="autoScan"><option value="false">Collect manually</option><option value="true">Collect automatically</option></select></label><label>Collection interval (minutes)<input id="intervalMinutes" type="number" min="5" max="10080" value="60" required></label><label>Website crawl policy<select id="respectRobots"><option value="true">Respect robots.txt</option><option value="false">Operator-authorized override</option></select></label></div></details><div id="formMessage" class="form-message" role="status"></div><div class="modal-actions"><button class="button subtle" type="button" data-close="sourceDialog">Cancel</button><button class="button primary" type="submit" id="saveSource">Save research site</button></div></form>
 </dialog>
-<dialog id="dolKeyDialog" class="modal small-modal" aria-labelledby="dolKeyDialogTitle">
-  <div class="modal-top"><span class="section-kicker">BUILT-IN OSHA INTEGRATION</span><button class="close-button" data-close="dolKeyDialog" aria-label="Close OSHA API key setup">×</button></div>
-  <h2 id="dolKeyDialogTitle">Set the DOL API key.</h2>
-  <p class="modal-intro">OSHA is already hardcoded to the Department of Labor Open Data API. Paste the free API key here; the app will test it before saving it locally.</p>
-  <form id="dolKeyForm">
-    <label>DOL Open Data API key<input id="dolApiKey" type="password" required maxlength="512" autocomplete="new-password" placeholder="Paste API key"></label>
-    <p id="dolApiKeyStatus" class="setup-note">The key is stored only on this computer under .runtime and is never written to GitHub or bidder exports.</p>
-    <div id="dolKeyMessage" class="form-message" role="status"></div>
-    <div class="modal-actions"><button class="button subtle" type="button" data-close="dolKeyDialog">Cancel</button><button class="button primary" type="submit" id="saveDolKey">Test &amp; save API key <span aria-hidden="true">↗</span></button></div>
-  </form>
-</dialog>
-<dialog id="samKeyDialog" class="modal small-modal" aria-labelledby="samKeyDialogTitle">
-  <div class="modal-top"><span class="section-kicker">BUILT-IN FEDERAL DEBARMENT INTEGRATION</span><button class="close-button" data-close="samKeyDialog" aria-label="Close SAM API key setup">×</button></div>
-  <h2 id="samKeyDialogTitle">Set the SAM.gov API key.</h2>
-  <p class="modal-intro">Federal debarment uses the official SAM.gov Exclusions API v4 production endpoint. Paste your SAM.gov Public API Key here; the app will test it before saving it locally.</p>
-  <form id="samKeyForm">
-    <label>SAM.gov Public API key<input id="samApiKey" type="password" required maxlength="512" autocomplete="new-password" placeholder="Paste SAM.gov Public API key"></label>
-    <p id="samApiKeyStatus" class="setup-note">The key is stored only on this computer under .runtime. It is injected into SAM requests at fetch time and is never written to source URLs, GitHub, bidder exports, or activity logs.</p>
-    <div id="samKeyMessage" class="form-message" role="status"></div>
-    <div class="modal-actions"><button class="button subtle" type="button" data-close="samKeyDialog">Cancel</button><button class="button primary" type="submit" id="saveSamKey">Test &amp; save API key <span aria-hidden="true">↗</span></button></div>
-  </form>
-</dialog>
-<dialog id="recordDialog" class="modal record-modal" aria-labelledby="recordDialogTitle">
-  <div class="modal-top"><span class="section-kicker">SAVED RECORD / SOURCE EVIDENCE</span><button class="close-button" data-close="recordDialog" aria-label="Close record details">×</button></div>
-  <h2 id="recordDialogTitle">Research record</h2>
-  <div id="recordDetail" aria-live="polite"></div>
-  <div class="modal-actions"><button class="button subtle" data-close="recordDialog">Close record</button></div>
-</dialog>
-<dialog id="deleteDialog" class="modal small-modal" aria-labelledby="deleteTitle"><div class="modal-top"><span class="section-kicker">REMOVE RESEARCH SITE</span><button class="close-button" data-close="deleteDialog" aria-label="Close deletion confirmation">×</button></div><h2 id="deleteTitle">Remove this research site?</h2><p id="deleteDescription">Its records and change history will also be removed. This cannot be undone.</p><div class="modal-actions"><button class="button subtle" data-close="deleteDialog">Keep research site</button><button class="button danger" id="confirmDelete">Delete research site</button></div></dialog>
-<dialog id="helpDialog" class="modal" aria-labelledby="helpTitle"><div class="modal-top"><span class="section-kicker">YOUR PARALEGAL RESEARCH WORKFLOW</span><button class="close-button" data-close="helpDialog" aria-label="Close help">×</button></div><h2 id="helpTitle">From the old CSV to reviewed updates.</h2><ol class="help-steps"><li><strong>Upload the existing bidder CSV.</strong><p>Use Upload existing CSV to load the firm’s current 30-column bidder database as the approved master starting point.</p></li><li><strong>Collect from the research sites.</strong><p>Set up each public research site and collect records. Scraped records are saved as source evidence and do not overwrite the master database.</p></li><li><strong>Compare collected data.</strong><p>Choose Compare collected data. Changed fields appear in the review queue with their source.</p></li><li><strong>Approve only the changes you want.</strong><p>Old values are red and newly found values are green. Choose Update or Keep old. Approved changes become part of the master bidder database.</p></li><li><strong>Search and export the master.</strong><p>The main table and CSV, Excel, and JSON exports use the firm’s exact 30-column bidder layout. Technical collection history remains separate.</p></li><li><strong>Share a diagnostic report if something fails.</strong><p>Capture a snapshot, then Export report. This exports technical logs separately from bidder records.</p></li></ol><p class="help-note">Keep the launcher window open while using the app. Press Ctrl+C there when you’re finished. Saved records remain on your computer.</p></dialog>
-<div id="toast" role="status" class="toast" hidden></div>
-<script src="/static/app.js"></script>
-<script src="/static/ui-shell.js"></script>
+
+<dialog id="dolKeyDialog" class="modal small-modal" aria-labelledby="dolKeyDialogTitle"><div class="modal-top"><span class="section-kicker">OSHA / DOL CREDENTIAL</span><button class="close-button" type="button" data-close="dolKeyDialog" aria-label="Close OSHA API key setup">×</button></div><h2 id="dolKeyDialogTitle">Set the DOL API key</h2><p class="modal-intro">The key is tested before it replaces the locally stored credential. The stored value is never displayed back to the browser.</p><form id="dolKeyForm"><label>DOL Open Data API key<input id="dolApiKey" type="password" required maxlength="512" autocomplete="new-password" placeholder="Paste API key"></label><p id="dolApiKeyStatus" class="setup-note">Checking credential status…</p><div id="dolKeyMessage" class="form-message" role="status"></div><div class="modal-actions"><button class="button subtle" type="button" data-close="dolKeyDialog">Cancel</button><button class="button primary" type="submit" id="saveDolKey">Test &amp; save API key</button></div></form></dialog>
+
+<dialog id="samKeyDialog" class="modal small-modal" aria-labelledby="samKeyDialogTitle"><div class="modal-top"><span class="section-kicker">SAM.GOV CREDENTIAL</span><button class="close-button" type="button" data-close="samKeyDialog" aria-label="Close SAM API key setup">×</button></div><h2 id="samKeyDialogTitle">Set the SAM.gov API key</h2><p class="modal-intro">The key is validated before it replaces the locally stored credential. The stored value is never displayed back to the browser.</p><form id="samKeyForm"><label>SAM.gov Public API key<input id="samApiKey" type="password" required maxlength="512" autocomplete="new-password" placeholder="Paste SAM.gov Public API key"></label><p id="samApiKeyStatus" class="setup-note">Checking credential status…</p><div id="samKeyMessage" class="form-message" role="status"></div><div class="modal-actions"><button class="button subtle" type="button" data-close="samKeyDialog">Cancel</button><button class="button primary" type="submit" id="saveSamKey">Test &amp; save API key</button></div></form></dialog>
+
+<dialog id="recordDialog" class="modal record-modal" aria-labelledby="recordDialogTitle"><div class="modal-top"><span class="section-kicker">SOURCE EVIDENCE</span><button class="close-button" type="button" data-close="recordDialog" aria-label="Close evidence details">×</button></div><h2 id="recordDialogTitle">Research record</h2><div id="recordDetail" aria-live="polite"></div><div class="modal-actions"><button class="button subtle" type="button" data-close="recordDialog">Close evidence</button></div></dialog>
+
+<dialog id="deleteDialog" class="modal small-modal" aria-labelledby="deleteTitle"><div class="modal-top"><span class="section-kicker">REMOVE RESEARCH SITE</span><button class="close-button" type="button" data-close="deleteDialog" aria-label="Close deletion confirmation">×</button></div><h2 id="deleteTitle">Remove this research site?</h2><p id="deleteDescription">Its collected evidence and history will also be removed. This cannot be undone.</p><div class="modal-actions"><button class="button subtle" type="button" data-close="deleteDialog">Keep research site</button><button class="button danger" id="confirmDelete" type="button">Delete research site</button></div></dialog>
+
+<dialog id="helpDialog" class="modal" aria-labelledby="helpTitle"><div class="modal-top"><span class="section-kicker">WORKFLOW GUIDE</span><button class="close-button" type="button" data-close="helpDialog" aria-label="Close help">×</button></div><h2 id="helpTitle">Approved truth and outside evidence stay separate</h2><ol class="help-steps"><li><strong>Import the approved bidder CSV.</strong><p>The file establishes the master baseline. Missing rows are not silently treated as deletions.</p></li><li><strong>Run targeted research.</strong><p>Only approved master contractors are queried. Research creates evidence, not master edits.</p></li><li><strong>Inspect Evidence.</strong><p>Review the source URL, retrieval context, match basis, collection state, and extracted values.</p></li><li><strong>Run Comparison review.</strong><p>Current approved values and new research values are shown side by side. Ambiguous identities remain separate.</p></li><li><strong>Approve or dismiss each field change.</strong><p>Only explicit approval changes a master field. Research-created contractors cannot be approved into the master.</p></li><li><strong>Export the approved master.</strong><p>CSV, Excel, and JSON exports use approved master data, not unresolved evidence.</p></li></ol></dialog>
+
+<div id="toast" role="status" aria-live="polite" class="toast" hidden></div>
 </body>
 </html>
