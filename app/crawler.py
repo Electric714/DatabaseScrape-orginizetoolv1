@@ -258,7 +258,20 @@ class CrawlEngine:
 
     async def run(self):
         activity.emit("INFO", "Scan started", source_id=self.source_id, job_id=self.job_id, url=self.start_url)
-        await db.update_job(self.job_id, status="running", started_at=db.utcnow(), message="Preparing crawl")
+        await db.transition_job(self.job_id, "running", message="Preparing crawl")
+        await db.update_job(
+            self.job_id,
+            heartbeat_at=db.utcnow(),
+            acquisition_limits_json=json.dumps({
+                "max_pages": self.max_pages, "max_depth": self.max_depth, "concurrency": self.concurrency,
+                "delay_ms": int(self.delay * 1000), "force_full": bool(self.force_full),
+                "contractor_selection_count": None if self.master_ids is None else len(self.master_ids),
+            }, sort_keys=True),
+        )
+        await db.record_job_diagnostic(
+            self.job_id, "INFO", "lifecycle", "Scan entered running state", source_id=self.source_id,
+            details={"recovery_safe_checkpoint": False if getattr(self.adapter, "query_mode", False) else None},
+        )
         try:
             async with httpx.AsyncClient(
                 transport=self.transport or PublicTransport(), trust_env=False, follow_redirects=False,
@@ -293,6 +306,7 @@ class CrawlEngine:
                 else:
                     activity.emit("INFO", "Crawl policy checked; discovering sitemap links", source_id=self.source_id, job_id=self.job_id)
                     frontier = [self.start_url, *await self._discover_sitemap_urls(client)]
+                await db.seed_frontier(self.job_id, self.source_id, [canonicalize_url(url) for url in frontier if canonicalize_url(url)], 0)
                 # Level barriers prevent a fast deep path from hiding a shorter path.
                 for depth in range(self.max_depth + 1):
                     batch = []
@@ -308,7 +322,7 @@ class CrawlEngine:
                     await db.increment_job(self.job_id, pages_discovered=len(batch))
                     frontier = {}
                     for offset in range(0, len(batch), self.concurrency):
-                        results = await asyncio.gather(*(self._process_safely(client, u) for u in batch[offset:offset + self.concurrency]))
+                        results = await asyncio.gather(*(self._process_safely(client, u, depth) for u in batch[offset:offset + self.concurrency]))
                         for links in results:
                             for link in links:
                                 if link in self.seen:
@@ -340,30 +354,78 @@ class CrawlEngine:
                               records_new=job["records_new"], records_updated=job["records_updated"])
                 if complete and self.master_ids is None:
                     await db.finish_observations(self.source_id, self.job_id)
-                await db.update_job(self.job_id, status="completed" if complete else "partial", finished_at=db.utcnow(),
-                    message=f"{self.processed} pages processed. " + ("Crawl boundary exhausted." if complete else "Limits or errors prevented a complete scan; missing records were not marked inactive."))
-        except asyncio.CancelledError:
-            activity.emit("WARNING", "Scan cancelled", source_id=self.source_id, job_id=self.job_id)
-            await db.update_job(self.job_id, status="cancelled", finished_at=db.utcnow(), message="Crawl cancelled")
+                final_status = "completed" if complete else "partial"
+                completeness = {
+                    "complete": complete, "limited": self.limited, "errors": int(job["errors"]),
+                    "pages_processed": self.processed, "missing_records_marked_inactive": bool(complete and self.master_ids is None),
+                }
+                await db.transition_job(
+                    self.job_id, final_status,
+                    message=f"{self.processed} pages processed. " + ("Crawl boundary exhausted." if complete else "Limits or errors prevented a complete scan; missing records were not marked inactive."),
+                    completeness_json=json.dumps(completeness, sort_keys=True),
+                )
+                await db.record_job_diagnostic(
+                    self.job_id, "INFO" if complete else "WARNING", "completion",
+                    "Scan completed" if complete else "Scan ended without a completeness guarantee",
+                    source_id=self.source_id, details=completeness,
+                )
+        except asyncio.CancelledError as exc:
+            shutdown_interruption = bool(exc.args and exc.args[0] == "application_shutdown")
+            if shutdown_interruption:
+                reason = "Application shutdown interrupted the scan before completion"
+                activity.emit("WARNING", reason, source_id=self.source_id, job_id=self.job_id)
+                await db.transition_job(
+                    self.job_id, "interrupted", message=reason, restart_reason=reason,
+                    completeness_json=json.dumps({"complete": False, "reason": "application_shutdown"}),
+                )
+                await db.record_job_diagnostic(
+                    self.job_id, "WARNING", "interruption", reason, source_id=self.source_id,
+                    details={"automatic_recovery_eligible": True},
+                )
+            else:
+                activity.emit("WARNING", "Scan cancelled", source_id=self.source_id, job_id=self.job_id)
+                await db.transition_job(self.job_id, "cancelled", message="Crawl cancelled")
+                await db.record_job_diagnostic(
+                    self.job_id, "WARNING", "cancellation", "Scan cancelled", source_id=self.source_id,
+                    details={"automatic_recovery_eligible": False},
+                )
             raise
         except Exception as exc:
             safe_error = activity.redact(str(exc))
             activity.emit("ERROR", "Scan failed", source_id=self.source_id, job_id=self.job_id, error=safe_error)
             await db.increment_job(self.job_id, errors=1)
-            await db.update_job(self.job_id, status="failed", finished_at=db.utcnow(), message=safe_error[:1000])
+            await db.transition_job(self.job_id, "failed", message=safe_error[:1000],
+                                    completeness_json=json.dumps({"complete": False, "reason": "failed"}))
+            await db.record_job_diagnostic(self.job_id, "ERROR", "failure", safe_error, source_id=self.source_id)
             raise
         finally:
             await self.renderer.close()
             await db.mark_source_scanned(self.source_id)
 
-    async def _process_safely(self, client, url):
+    async def _process_safely(self, client, url, depth=0):
         activity.emit("INFO", "Fetching page", source_id=self.source_id, job_id=self.job_id, url=url)
+        await db.frontier_state(self.job_id, url, "processing", increment_attempt=True)
         try:
             links = await self._process_url(client, url)
+            await db.frontier_state(self.job_id, url, "done", discovered_links=links)
+            await db.seed_frontier(self.job_id, self.source_id, links, depth + 1)
             activity.emit("INFO", "Page processed", source_id=self.source_id, job_id=self.job_id, url=url, links=len(links))
             return links
         except Exception as exc:
             safe_error = activity.redact(str(exc))
+            category = "page_error"
+            lowered = safe_error.lower()
+            if "http 401" in lowered or "http 403" in lowered or "access challenge" in lowered or "access denied" in lowered:
+                category = "access_block"
+            elif "http 429" in lowered:
+                category = "rate_limit"
+            elif "response exceeds" in lowered or "decoder" in lowered or "unrecognized" in lowered:
+                category = "malformed_response"
+            await db.frontier_state(self.job_id, url, "failed", last_error=safe_error[:1000])
+            await db.record_job_diagnostic(
+                self.job_id, "ERROR", category, safe_error, source_id=self.source_id, url=url,
+                retryable=False, details={"depth": depth},
+            )
             activity.emit("ERROR", "Page could not be processed", source_id=self.source_id, job_id=self.job_id, url=url, error=safe_error)
             await db.increment_job(self.job_id, errors=1)
             await db.upsert_page(self.source_id, url, last_error=safe_error[:1000])
@@ -376,6 +438,7 @@ class CrawlEngine:
         finally:
             self.processed += 1
             await db.increment_job(self.job_id, pages_processed=1)
+            await db.update_job(self.job_id, heartbeat_at=db.utcnow())
 
     async def _process_url(self, client, url):
         cached = await db.get_page(self.source_id, url)
@@ -540,8 +603,17 @@ class CrawlEngine:
                         # Keep credential-bearing request URLs out of caches, logs, and records.
                         visible_url = url if request_builder else str(response.url)
                         result = FetchResult(visible_url, response.status_code, text, dict(response.headers), body=bytes(body))
-                    if result.status not in {429, 500, 502, 503, 504} or attempt == 3:
+                    if result.status not in {429, 500, 502, 503, 504}:
                         break
+                    if attempt == 3:
+                        await db.record_job_diagnostic(
+                            self.job_id, "ERROR", "retry_exhausted", f"HTTP {result.status} after bounded retries",
+                            source_id=self.source_id, url=url, retryable=True, attempt_no=attempt + 1,
+                        )
+                        break
+                    await db.record_retry(
+                        self.job_id, url, attempt + 1, f"HTTP {result.status}", source_id=self.source_id
+                    )
                     wait = min(2 ** attempt, 20)
                     retry = result.headers.get("retry-after", "")
                     try:
@@ -552,9 +624,16 @@ class CrawlEngine:
                         raise ValueError("Server requested a longer retry delay; rescan later")
                     activity.emit("WARNING", "Temporary response; retrying after a delay", job_id=self.job_id, url=url, status=result.status, seconds=wait, attempt=attempt + 1)
                     await asyncio.sleep(wait)
-                except (httpx.TimeoutException, httpx.NetworkError):
+                except (httpx.TimeoutException, httpx.NetworkError) as exc:
                     if attempt == 3:
+                        await db.record_job_diagnostic(
+                            self.job_id, "ERROR", "retry_exhausted", type(exc).__name__,
+                            source_id=self.source_id, url=url, retryable=True, attempt_no=attempt + 1,
+                        )
                         raise
+                    await db.record_retry(
+                        self.job_id, url, attempt + 1, type(exc).__name__, source_id=self.source_id
+                    )
                     await asyncio.sleep(2 ** attempt)
             if redirects and result.status in {301, 302, 303, 307, 308}:
                 location = result.headers.get("location")
