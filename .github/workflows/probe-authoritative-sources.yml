@@ -1,0 +1,26 @@
+name: Probe authoritative public sources
+
+on:
+  push:
+    branches:
+      - feature/authoritative-source-coverage
+    paths:
+      - scripts/probe_authoritative_sources.py
+      - .github/workflows/probe-authoritative-sources.yml
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Probe official source structures
+        run: python scripts/probe_authoritative_sources.py
