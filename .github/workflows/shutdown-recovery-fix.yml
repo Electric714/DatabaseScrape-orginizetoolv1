@@ -1,0 +1,30 @@
+name: Apply graceful shutdown recovery hardening
+
+on:
+  push:
+    branches:
+      - hardening/reliability-recovery-audit
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply shutdown recovery fixes
+        run: python scripts/fix_shutdown_recovery.py
+      - name: Commit fixes
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Recover interrupted scans across normal restarts'
+          git push origin HEAD:${GITHUB_REF_NAME}
