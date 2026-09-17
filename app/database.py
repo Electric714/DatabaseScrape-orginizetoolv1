@@ -71,9 +71,8 @@ def _migrate_v4(conn: sqlite3.Connection) -> None:
     if "proposal_id" not in history_columns:
         conn.execute("ALTER TABLE bidder_master_history ADD COLUMN proposal_id INTEGER")
 
-    conn.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS crawl_job_diagnostics (
+    statements = (
+        """CREATE TABLE IF NOT EXISTS crawl_job_diagnostics (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             job_id INTEGER NOT NULL REFERENCES crawl_jobs(id) ON DELETE CASCADE,
             source_id INTEGER,
@@ -85,8 +84,8 @@ def _migrate_v4(conn: sqlite3.Connection) -> None:
             retryable INTEGER NOT NULL DEFAULT 0,
             attempt_no INTEGER,
             details_json TEXT NOT NULL DEFAULT '{}'
-        );
-        CREATE TABLE IF NOT EXISTS crawl_frontier (
+        )""",
+        """CREATE TABLE IF NOT EXISTS crawl_frontier (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             job_id INTEGER NOT NULL REFERENCES crawl_jobs(id) ON DELETE CASCADE,
             source_id INTEGER NOT NULL,
@@ -98,20 +97,21 @@ def _migrate_v4(conn: sqlite3.Connection) -> None:
             discovered_links_json TEXT NOT NULL DEFAULT '[]',
             updated_at TEXT NOT NULL,
             UNIQUE(job_id, url)
-        );
-        CREATE INDEX IF NOT EXISTS idx_jobs_status_id ON crawl_jobs(status, id DESC);
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_recovery_parent ON crawl_jobs(parent_job_id) WHERE parent_job_id IS NOT NULL;
-        CREATE INDEX IF NOT EXISTS idx_job_diagnostics_job ON crawl_job_diagnostics(job_id, id);
-        CREATE INDEX IF NOT EXISTS idx_job_diagnostics_source ON crawl_job_diagnostics(source_id, id DESC);
-        CREATE INDEX IF NOT EXISTS idx_frontier_job_state ON crawl_frontier(job_id, state, depth, id);
-        CREATE INDEX IF NOT EXISTS idx_record_history_record ON record_history(record_id, id DESC);
-        CREATE INDEX IF NOT EXISTS idx_activity_created ON activity_events(created_at, id);
-        CREATE INDEX IF NOT EXISTS idx_activity_job ON activity_events(job_id, id);
-        CREATE INDEX IF NOT EXISTS idx_records_active_changed ON records(source_id, active, last_changed DESC, id DESC);
-        CREATE INDEX IF NOT EXISTS idx_proposals_signature_status ON bidder_proposals(signature, status, id DESC);
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_bidder_history_proposal ON bidder_master_history(proposal_id) WHERE proposal_id IS NOT NULL;
-        """
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_jobs_status_id ON crawl_jobs(status, id DESC)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_recovery_parent ON crawl_jobs(parent_job_id) WHERE parent_job_id IS NOT NULL",
+        "CREATE INDEX IF NOT EXISTS idx_job_diagnostics_job ON crawl_job_diagnostics(job_id, id)",
+        "CREATE INDEX IF NOT EXISTS idx_job_diagnostics_source ON crawl_job_diagnostics(source_id, id DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_frontier_job_state ON crawl_frontier(job_id, state, depth, id)",
+        "CREATE INDEX IF NOT EXISTS idx_record_history_record ON record_history(record_id, id DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_activity_created ON activity_events(created_at, id)",
+        "CREATE INDEX IF NOT EXISTS idx_activity_job ON activity_events(job_id, id)",
+        "CREATE INDEX IF NOT EXISTS idx_records_active_changed ON records(source_id, active, last_changed DESC, id DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_proposals_signature_status ON bidder_proposals(signature, status, id DESC)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_bidder_history_proposal ON bidder_master_history(proposal_id) WHERE proposal_id IS NOT NULL",
     )
+    for statement in statements:
+        conn.execute(statement)
 
 
 def connect() -> sqlite3.Connection:
