@@ -352,8 +352,14 @@ def _sync_mark_interrupted_jobs() -> list[int]:
                 (row["id"], row["source_id"], now, "WARNING", "interruption",
                  "Process ended before the scan reached a terminal state"),
             )
+        recoverable = conn.execute(
+            """SELECT j.id FROM crawl_jobs j
+               WHERE j.status='interrupted' AND COALESCE(j.attempt_no,1) < 3
+                 AND NOT EXISTS (SELECT 1 FROM crawl_jobs child WHERE child.parent_job_id=j.id)
+               ORDER BY j.id"""
+        ).fetchall()
         conn.commit()
-        return [int(row["id"]) for row in rows]
+        return [int(row["id"]) for row in recoverable]
 
 
 def _sync_create_source(data: dict[str, Any]) -> dict[str, Any]:

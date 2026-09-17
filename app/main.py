@@ -412,7 +412,7 @@ async def lifespan(_app: FastAPI):
                 await SCHEDULER_TASK
             tasks = list(TASKS.values())
             for task in tasks:
-                task.cancel()
+                task.cancel("application_shutdown")
             await asyncio.gather(*tasks, return_exceptions=True)
             activity.emit("INFO", "Workspace stopped. Active scans have been closed safely.")
             await db.list_events(limit=1)

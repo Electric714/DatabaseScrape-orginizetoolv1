@@ -369,10 +369,26 @@ class CrawlEngine:
                     "Scan completed" if complete else "Scan ended without a completeness guarantee",
                     source_id=self.source_id, details=completeness,
                 )
-        except asyncio.CancelledError:
-            activity.emit("WARNING", "Scan cancelled", source_id=self.source_id, job_id=self.job_id)
-            await db.transition_job(self.job_id, "cancelled", message="Crawl cancelled")
-            await db.record_job_diagnostic(self.job_id, "WARNING", "cancellation", "Scan cancelled", source_id=self.source_id)
+        except asyncio.CancelledError as exc:
+            shutdown_interruption = bool(exc.args and exc.args[0] == "application_shutdown")
+            if shutdown_interruption:
+                reason = "Application shutdown interrupted the scan before completion"
+                activity.emit("WARNING", reason, source_id=self.source_id, job_id=self.job_id)
+                await db.transition_job(
+                    self.job_id, "interrupted", message=reason, restart_reason=reason,
+                    completeness_json=json.dumps({"complete": False, "reason": "application_shutdown"}),
+                )
+                await db.record_job_diagnostic(
+                    self.job_id, "WARNING", "interruption", reason, source_id=self.source_id,
+                    details={"automatic_recovery_eligible": True},
+                )
+            else:
+                activity.emit("WARNING", "Scan cancelled", source_id=self.source_id, job_id=self.job_id)
+                await db.transition_job(self.job_id, "cancelled", message="Crawl cancelled")
+                await db.record_job_diagnostic(
+                    self.job_id, "WARNING", "cancellation", "Scan cancelled", source_id=self.source_id,
+                    details={"automatic_recovery_eligible": False},
+                )
             raise
         except Exception as exc:
             safe_error = activity.redact(str(exc))

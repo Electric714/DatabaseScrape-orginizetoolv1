@@ -178,3 +178,26 @@ async def test_approved_update_is_not_duplicated_after_reinitialization(database
     second = await bm.apply(proposal["id"])
     assert second["status"] == "applied"
     assert len(await bm.history(master["_master_id"])) == 1
+
+
+async def test_persisted_interruption_is_selected_for_startup_recovery(database, source):
+    job_id = await db.create_job(source["id"], False)
+    await db.transition_job(job_id, "running")
+    await db.transition_job(
+        job_id, "interrupted", message="Application shutdown interrupted the scan before completion",
+        restart_reason="Application shutdown interrupted the scan before completion",
+    )
+    recoverable = await db.mark_interrupted_jobs()
+    assert job_id in recoverable
+    child = await db.create_recovery_job(job_id)
+    assert child["parent_job_id"] == job_id
+    assert child["recovery_mode"] == "restart"
+    assert child["status"] == "queued"
+
+
+async def test_explicit_cancellation_is_not_selected_for_startup_recovery(database, source):
+    job_id = await db.create_job(source["id"], False)
+    await db.transition_job(job_id, "running")
+    await db.transition_job(job_id, "cancelled", message="operator cancelled")
+    recoverable = await db.mark_interrupted_jobs()
+    assert job_id not in recoverable
