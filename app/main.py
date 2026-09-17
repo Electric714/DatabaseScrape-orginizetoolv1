@@ -22,6 +22,7 @@ from openpyxl.utils import get_column_letter
 from . import database as db
 from . import activity
 from . import bidder_master as bidder_db
+from . import backup as backup_tools
 from .config import (
     BASE_DIR,
     dol_api_key_configured,
@@ -306,6 +307,29 @@ async def launch_scan(source_id: int, force_full: bool = False, master_ids=None)
         return await _launch_scan(source_id, force_full, master_ids)
 
 
+def _job_selection(job: dict):
+    try:
+        return json.loads(job.get("selection_json") or "null")
+    except (TypeError, ValueError):
+        return None
+
+
+def _start_job_task(source: dict, job: dict) -> None:
+    job_id = int(job["id"])
+    engine = CrawlEngine(
+        source, job_id, force_full=bool(job.get("force_full")), master_ids=_job_selection(job)
+    )
+    task = asyncio.create_task(engine.run(), name=f"crawl-job-{job_id}")
+    TASKS[job_id] = task
+
+    def _done(_task: asyncio.Task):
+        TASKS.pop(job_id, None)
+        with suppress(asyncio.CancelledError, Exception):
+            _task.result()
+
+    task.add_done_callback(_done)
+
+
 async def _launch_scan(source_id: int, force_full: bool = False, master_ids=None) -> dict:
     source = await db.get_source(source_id)
     if not source:
@@ -319,19 +343,11 @@ async def _launch_scan(source_id: int, force_full: bool = False, master_ids=None
     running = await db.running_job_for_source(source_id)
     if running:
         return running
-    job_id = await db.create_job(source_id, force_full)
+    job_id = await db.create_job(source_id, force_full, selection=master_ids)
     activity.emit("INFO", "Scan queued", source_id=source_id, job_id=job_id, mode="full" if force_full else "incremental")
-    engine = CrawlEngine(source, job_id, force_full=force_full, master_ids=master_ids)
-    task = asyncio.create_task(engine.run(), name=f"crawl-job-{job_id}")
-    TASKS[job_id] = task
-
-    def _done(_task: asyncio.Task):
-        TASKS.pop(job_id, None)
-        with suppress(asyncio.CancelledError, Exception):
-            _task.result()
-
-    task.add_done_callback(_done)
-    return await db.get_job(job_id)
+    job = await db.get_job(job_id)
+    _start_job_task(source, job)
+    return job
 
 
 async def scheduler_loop():
@@ -373,7 +389,20 @@ async def lifespan(_app: FastAPI):
         await ensure_poc_sources()
         activity.install()
         activity.emit("INFO", "Paralegal Database Tool started. Ready to maintain the master bidder database and collect public-record evidence.", version=activity.APP_VERSION)
-        await db.mark_interrupted_jobs()
+        interrupted = await db.mark_interrupted_jobs()
+        for interrupted_job_id in interrupted:
+            recovery = await db.create_recovery_job(interrupted_job_id)
+            if not recovery:
+                continue
+            source = await db.get_source(recovery["source_id"])
+            if not source:
+                continue
+            activity.emit(
+                "WARNING", "Interrupted scan queued for a clean recovery attempt",
+                source_id=source["id"], job_id=recovery["id"], parent_job_id=interrupted_job_id,
+                attempt_no=recovery.get("attempt_no"),
+            )
+            _start_job_task(source, recovery)
         SCHEDULER_TASK = asyncio.create_task(scheduler_loop(), name="source-scheduler")
         try:
             yield
@@ -451,6 +480,22 @@ async def activity_export():
 @app.get("/api/stats")
 async def get_stats():
     return await db.stats()
+
+
+@app.get("/api/maintenance/integrity")
+async def maintenance_integrity(full: bool = False):
+    return await db.integrity_check(full=full)
+
+
+@app.get("/api/maintenance/backup")
+async def maintenance_backup():
+    archive, manifest = await asyncio.to_thread(backup_tools.create_backup_bytes)
+    filename = f"paralegal-research-desk-backup-{manifest['created_at'].replace(':', '').replace('+00:00', 'Z')}.zip"
+    activity.emit("INFO", "Operator-safe database backup created", schema_version=manifest["schema_version"])
+    return StreamingResponse(
+        io.BytesIO(archive), media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.get("/api/integrations/dol")
@@ -604,6 +649,18 @@ async def job(job_id: int):
     if not result:
         raise HTTPException(status_code=404, detail="Job not found")
     return result
+
+
+@app.get("/api/jobs/{job_id}/diagnostics")
+async def job_diagnostics(job_id: int, limit: int = Query(default=1000, ge=1, le=5000)):
+    result = await db.get_job(job_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return {
+        "job": result,
+        "diagnostics": await db.job_diagnostics(job_id, limit),
+        "frontier": await db.frontier_summary(job_id),
+    }
 
 
 @app.get("/api/records")

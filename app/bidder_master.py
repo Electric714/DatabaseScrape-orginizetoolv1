@@ -434,11 +434,11 @@ def _apply(proposal_id: int) -> dict[str, Any]:
         _refresh_norms(conn, int(master["pk"]))
         conn.execute(
             """INSERT INTO bidder_master_history
-               (master_pk,field_name,old_value,new_value,source_record_id,source_name,source_url,applied_at)
-               VALUES (?,?,?,?,?,?,?,?)""",
+               (master_pk,field_name,old_value,new_value,source_record_id,source_name,source_url,applied_at,proposal_id)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
             (
                 master["pk"], field, old_value, new_value, proposal["source_record_id"],
-                proposal["source_name"], proposal["source_url"], now,
+                proposal["source_name"], proposal["source_url"], now, proposal_id,
             ),
         )
         conn.execute(

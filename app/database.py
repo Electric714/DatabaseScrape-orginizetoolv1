@@ -17,12 +17,111 @@ def utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+JOB_STATES = {"queued", "running", "partial", "completed", "failed", "cancelled", "interrupted"}
+JOB_TRANSITIONS = {
+    "queued": {"running", "failed", "cancelled", "interrupted"},
+    "running": {"partial", "completed", "failed", "cancelled", "interrupted"},
+    "partial": set(),
+    "completed": set(),
+    "failed": set(),
+    "cancelled": set(),
+    "interrupted": set(),
+}
+
+
+def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+
+
+def _run_migration(conn: sqlite3.Connection, target_version: int, migration) -> None:
+    current = int(conn.execute("PRAGMA user_version").fetchone()[0])
+    if current >= target_version:
+        return
+    savepoint = f"migration_{target_version}"
+    conn.execute(f"SAVEPOINT {savepoint}")
+    try:
+        migration(conn)
+        conn.execute(f"PRAGMA user_version={int(target_version)}")
+        conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+    except Exception:
+        conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+        conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+        raise
+
+
+def _migrate_v4(conn: sqlite3.Connection) -> None:
+    columns = _table_columns(conn, "crawl_jobs")
+    additions = {
+        "selection_json": "TEXT NOT NULL DEFAULT 'null'",
+        "parent_job_id": "INTEGER REFERENCES crawl_jobs(id)",
+        "recovery_mode": "TEXT NOT NULL DEFAULT 'fresh'",
+        "restart_reason": "TEXT",
+        "attempt_no": "INTEGER NOT NULL DEFAULT 1",
+        "retry_count": "INTEGER NOT NULL DEFAULT 0",
+        "heartbeat_at": "TEXT",
+        "interrupted_at": "TEXT",
+        "acquisition_limits_json": "TEXT NOT NULL DEFAULT '{}'",
+        "completeness_json": "TEXT NOT NULL DEFAULT '{}'",
+    }
+    for name, declaration in additions.items():
+        if name not in columns:
+            conn.execute(f"ALTER TABLE crawl_jobs ADD COLUMN {name} {declaration}")
+
+    history_columns = _table_columns(conn, "bidder_master_history")
+    if "proposal_id" not in history_columns:
+        conn.execute("ALTER TABLE bidder_master_history ADD COLUMN proposal_id INTEGER")
+
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS crawl_job_diagnostics (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id INTEGER NOT NULL REFERENCES crawl_jobs(id) ON DELETE CASCADE,
+            source_id INTEGER,
+            created_at TEXT NOT NULL,
+            level TEXT NOT NULL,
+            category TEXT NOT NULL,
+            message TEXT NOT NULL,
+            url TEXT,
+            retryable INTEGER NOT NULL DEFAULT 0,
+            attempt_no INTEGER,
+            details_json TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE TABLE IF NOT EXISTS crawl_frontier (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id INTEGER NOT NULL REFERENCES crawl_jobs(id) ON DELETE CASCADE,
+            source_id INTEGER NOT NULL,
+            url TEXT NOT NULL,
+            depth INTEGER NOT NULL DEFAULT 0,
+            state TEXT NOT NULL DEFAULT 'queued',
+            attempts INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT,
+            discovered_links_json TEXT NOT NULL DEFAULT '[]',
+            updated_at TEXT NOT NULL,
+            UNIQUE(job_id, url)
+        );
+        CREATE INDEX IF NOT EXISTS idx_jobs_status_id ON crawl_jobs(status, id DESC);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_recovery_parent ON crawl_jobs(parent_job_id) WHERE parent_job_id IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_job_diagnostics_job ON crawl_job_diagnostics(job_id, id);
+        CREATE INDEX IF NOT EXISTS idx_job_diagnostics_source ON crawl_job_diagnostics(source_id, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_frontier_job_state ON crawl_frontier(job_id, state, depth, id);
+        CREATE INDEX IF NOT EXISTS idx_record_history_record ON record_history(record_id, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_activity_created ON activity_events(created_at, id);
+        CREATE INDEX IF NOT EXISTS idx_activity_job ON activity_events(job_id, id);
+        CREATE INDEX IF NOT EXISTS idx_records_active_changed ON records(source_id, active, last_changed DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_proposals_signature_status ON bidder_proposals(signature, status, id DESC);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_bidder_history_proposal ON bidder_master_history(proposal_id) WHERE proposal_id IS NOT NULL;
+        """
+    )
+
+
 def connect() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=FULL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA busy_timeout=30000")
+    conn.execute("PRAGMA wal_autocheckpoint=1000")
     return conn
 
 
@@ -224,16 +323,37 @@ def _sync_init_db() -> None:
                 conn.execute("UPDATE records SET content_hash=? WHERE id=?", (record_hash(payload), row["id"]))
             conn.execute("UPDATE pages SET content_hash=NULL, etag=NULL, last_modified=NULL")
             conn.execute("PRAGMA user_version=3")
+        if int(conn.execute("PRAGMA user_version").fetchone()[0]) < 4:
+            _run_migration(conn, 4, _migrate_v4)
+        quick_check = conn.execute("PRAGMA quick_check").fetchone()[0]
+        if quick_check != "ok":
+            raise RuntimeError(f"SQLite quick_check failed: {quick_check}")
         conn.commit()
 
 
-def _sync_mark_interrupted_jobs() -> None:
+def _sync_mark_interrupted_jobs() -> list[int]:
+    now = utcnow()
     with closing(connect()) as conn:
-        conn.execute(
-            "UPDATE crawl_jobs SET status='interrupted', finished_at=?, message='Application restarted during crawl' WHERE status IN ('queued','running')",
-            (utcnow(),),
-        )
+        conn.execute("BEGIN IMMEDIATE")
+        rows = conn.execute(
+            "SELECT id,source_id,status FROM crawl_jobs WHERE status IN ('queued','running') ORDER BY id"
+        ).fetchall()
+        for row in rows:
+            conn.execute(
+                """UPDATE crawl_jobs SET status='interrupted', finished_at=?, interrupted_at=?, heartbeat_at=?,
+                   message='Application restarted during crawl', restart_reason='Process ended before the scan reached a terminal state'
+                   WHERE id=? AND status IN ('queued','running')""",
+                (now, now, now, row["id"]),
+            )
+            conn.execute(
+                """INSERT INTO crawl_job_diagnostics
+                   (job_id,source_id,created_at,level,category,message,retryable,details_json)
+                   VALUES (?,?,?,?,?,?,0,'{}')""",
+                (row["id"], row["source_id"], now, "WARNING", "interruption",
+                 "Process ended before the scan reached a terminal state"),
+            )
         conn.commit()
+        return [int(row["id"]) for row in rows]
 
 
 def _sync_create_source(data: dict[str, Any]) -> dict[str, Any]:
@@ -304,11 +424,15 @@ def _sync_mark_source_scanned(source_id: int) -> None:
         conn.commit()
 
 
-def _sync_create_job(source_id: int, force_full: bool) -> int:
+def _sync_create_job(source_id: int, force_full: bool, selection=None, *, parent_job_id: int | None = None,
+                     recovery_mode: str = "fresh", restart_reason: str | None = None, attempt_no: int = 1) -> int:
+    selection_json = json.dumps(selection if selection is not None else None, separators=(",", ":"))
     with closing(connect()) as conn:
         cur = conn.execute(
-            "INSERT INTO crawl_jobs(source_id,status,force_full) VALUES (?, 'queued', ?)",
-            (source_id, int(force_full)),
+            """INSERT INTO crawl_jobs
+               (source_id,status,force_full,selection_json,parent_job_id,recovery_mode,restart_reason,attempt_no,heartbeat_at)
+               VALUES (?, 'queued', ?, ?, ?, ?, ?, ?, ?)""",
+            (source_id, int(force_full), selection_json, parent_job_id, recovery_mode, restart_reason, attempt_no, utcnow()),
         )
         conn.commit()
         return int(cur.lastrowid)
@@ -321,6 +445,174 @@ def _sync_update_job(job_id: int, **fields: Any) -> None:
     with closing(connect()) as conn:
         conn.execute(f"UPDATE crawl_jobs SET {clause} WHERE id=?", (*fields.values(), job_id))
         conn.commit()
+
+
+def _sync_transition_job(job_id: int, new_status: str, message: str | None = None, **fields: Any) -> dict[str, Any]:
+    if new_status not in JOB_STATES:
+        raise ValueError(f"Unknown job status: {new_status}")
+    with closing(connect()) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT * FROM crawl_jobs WHERE id=?", (job_id,)).fetchone()
+        if not row:
+            raise ValueError("Job not found")
+        old_status = row["status"]
+        if old_status == new_status:
+            conn.commit()
+            return dict(row)
+        if new_status not in JOB_TRANSITIONS.get(old_status, set()):
+            raise ValueError(f"Invalid job transition: {old_status} -> {new_status}")
+        now = utcnow()
+        values = dict(fields)
+        values["status"] = new_status
+        values["heartbeat_at"] = now
+        if message is not None:
+            values["message"] = message
+        if new_status == "running" and not row["started_at"]:
+            values["started_at"] = now
+        if new_status in {"partial", "completed", "failed", "cancelled", "interrupted"}:
+            values.setdefault("finished_at", now)
+        if new_status == "interrupted":
+            values.setdefault("interrupted_at", now)
+        clause = ", ".join(f"{key}=?" for key in values)
+        conn.execute(f"UPDATE crawl_jobs SET {clause} WHERE id=?", (*values.values(), job_id))
+        conn.commit()
+        return dict(conn.execute("SELECT * FROM crawl_jobs WHERE id=?", (job_id,)).fetchone())
+
+
+def _sync_record_job_diagnostic(job_id: int, level: str, category: str, message: str, *,
+                                source_id: int | None = None, url: str | None = None,
+                                retryable: bool = False, attempt_no: int | None = None,
+                                details: dict[str, Any] | None = None) -> int:
+    with closing(connect()) as conn:
+        if source_id is None:
+            row = conn.execute("SELECT source_id FROM crawl_jobs WHERE id=?", (job_id,)).fetchone()
+            source_id = int(row["source_id"]) if row else None
+        cur = conn.execute(
+            """INSERT INTO crawl_job_diagnostics
+               (job_id,source_id,created_at,level,category,message,url,retryable,attempt_no,details_json)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (job_id, source_id, utcnow(), level, category, str(message)[:4000], url, int(retryable), attempt_no,
+             json.dumps(details or {}, ensure_ascii=False, sort_keys=True, default=str)),
+        )
+        conn.commit()
+        return int(cur.lastrowid)
+
+
+def _sync_record_retry(job_id: int, url: str, attempt_no: int, reason: str, *, source_id: int | None = None) -> None:
+    with closing(connect()) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("UPDATE crawl_jobs SET retry_count=retry_count+1,heartbeat_at=? WHERE id=?", (utcnow(), job_id))
+        if source_id is None:
+            row = conn.execute("SELECT source_id FROM crawl_jobs WHERE id=?", (job_id,)).fetchone()
+            source_id = int(row["source_id"]) if row else None
+        conn.execute(
+            """INSERT INTO crawl_job_diagnostics
+               (job_id,source_id,created_at,level,category,message,url,retryable,attempt_no,details_json)
+               VALUES (?,?,?,?,?,?,?,1,?,'{}')""",
+            (job_id, source_id, utcnow(), "WARNING", "retry", str(reason)[:4000], url, attempt_no),
+        )
+        conn.commit()
+
+
+def _sync_create_recovery_job(parent_job_id: int, max_attempts: int = 3) -> dict[str, Any] | None:
+    with closing(connect()) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        parent = conn.execute("SELECT * FROM crawl_jobs WHERE id=?", (parent_job_id,)).fetchone()
+        if not parent or parent["status"] != "interrupted":
+            conn.commit()
+            return None
+        existing = conn.execute("SELECT * FROM crawl_jobs WHERE parent_job_id=?", (parent_job_id,)).fetchone()
+        if existing:
+            conn.commit()
+            return dict(existing)
+        next_attempt = int(parent["attempt_no"] or 1) + 1
+        if next_attempt > max_attempts:
+            conn.execute(
+                """INSERT INTO crawl_job_diagnostics
+                   (job_id,source_id,created_at,level,category,message,retryable,details_json)
+                   VALUES (?,?,?,?,?,?,0,'{}')""",
+                (parent_job_id, parent["source_id"], utcnow(), "ERROR", "recovery_exhausted",
+                 f"Automatic restart limit reached after {max_attempts} attempts"),
+            )
+            conn.commit()
+            return None
+        reason = "Previous attempt was interrupted. Targeted adapters keep aggregate state in memory, so this attempt restarts cleanly rather than claiming an unsafe checkpoint resume."
+        cur = conn.execute(
+            """INSERT INTO crawl_jobs
+               (source_id,status,force_full,selection_json,parent_job_id,recovery_mode,restart_reason,attempt_no,heartbeat_at,acquisition_limits_json)
+               VALUES (?, 'queued', ?, ?, ?, 'restart', ?, ?, ?, ?)""",
+            (parent["source_id"], parent["force_full"], parent["selection_json"], parent_job_id, reason, next_attempt,
+             utcnow(), parent["acquisition_limits_json"] or "{}"),
+        )
+        child_id = int(cur.lastrowid)
+        conn.execute(
+            """INSERT INTO crawl_job_diagnostics
+               (job_id,source_id,created_at,level,category,message,retryable,details_json)
+               VALUES (?,?,?,?,?,?,0,?)""",
+            (child_id, parent["source_id"], utcnow(), "WARNING", "recovery_restart", reason,
+             json.dumps({"parent_job_id": parent_job_id, "attempt_no": next_attempt})),
+        )
+        conn.commit()
+        return dict(conn.execute("SELECT * FROM crawl_jobs WHERE id=?", (child_id,)).fetchone())
+
+
+def _sync_seed_frontier(job_id: int, source_id: int, urls: list[str], depth: int) -> None:
+    if not urls:
+        return
+    now = utcnow()
+    with closing(connect()) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.executemany(
+            """INSERT OR IGNORE INTO crawl_frontier(job_id,source_id,url,depth,state,updated_at)
+               VALUES (?,?,?,?,'queued',?)""",
+            [(job_id, source_id, url, depth, now) for url in urls],
+        )
+        conn.commit()
+
+
+def _sync_frontier_state(job_id: int, url: str, state: str, *, last_error: str | None = None,
+                         discovered_links: list[str] | None = None, increment_attempt: bool = False) -> None:
+    if state not in {"queued", "processing", "done", "failed"}:
+        raise ValueError("Unknown frontier state")
+    fields = ["state=?", "updated_at=?", "last_error=?"]
+    params: list[Any] = [state, utcnow(), last_error]
+    if discovered_links is not None:
+        fields.append("discovered_links_json=?")
+        params.append(json.dumps(discovered_links, separators=(",", ":")))
+    if increment_attempt:
+        fields.append("attempts=attempts+1")
+    with closing(connect()) as conn:
+        conn.execute(f"UPDATE crawl_frontier SET {', '.join(fields)} WHERE job_id=? AND url=?", (*params, job_id, url))
+        conn.commit()
+
+
+def _sync_frontier_summary(job_id: int) -> dict[str, Any]:
+    with closing(connect()) as conn:
+        rows = conn.execute("SELECT state,COUNT(*) count FROM crawl_frontier WHERE job_id=? GROUP BY state", (job_id,)).fetchall()
+        counts = {row["state"]: row["count"] for row in rows}
+        total = sum(counts.values())
+        return {"job_id": job_id, "total": total, "states": counts}
+
+
+def _sync_job_diagnostics(job_id: int, limit: int = 1000) -> list[dict[str, Any]]:
+    with closing(connect()) as conn:
+        rows = conn.execute(
+            "SELECT * FROM crawl_job_diagnostics WHERE job_id=? ORDER BY id LIMIT ?", (job_id, limit)
+        ).fetchall()
+        items = []
+        for row in rows:
+            item = dict(row)
+            item["details"] = json.loads(item.pop("details_json") or "{}")
+            items.append(item)
+        return items
+
+
+def _sync_integrity_check(full: bool = False) -> dict[str, Any]:
+    with closing(connect()) as conn:
+        pragma = "integrity_check" if full else "quick_check"
+        checks = [row[0] for row in conn.execute(f"PRAGMA {pragma}").fetchall()]
+        foreign_keys = [tuple(row) for row in conn.execute("PRAGMA foreign_key_check").fetchall()]
+        return {"ok": checks == ["ok"] and not foreign_keys, "check": pragma, "results": checks, "foreign_key_issues": foreign_keys}
 
 
 def _sync_increment_job(job_id: int, **increments: int) -> None:
@@ -572,6 +864,15 @@ def _async_database(function):
 
 init_db = _async_database(_sync_init_db)
 mark_interrupted_jobs = _async_database(_sync_mark_interrupted_jobs)
+create_recovery_job = _async_database(_sync_create_recovery_job)
+transition_job = _async_database(_sync_transition_job)
+record_job_diagnostic = _async_database(_sync_record_job_diagnostic)
+record_retry = _async_database(_sync_record_retry)
+seed_frontier = _async_database(_sync_seed_frontier)
+frontier_state = _async_database(_sync_frontier_state)
+frontier_summary = _async_database(_sync_frontier_summary)
+job_diagnostics = _async_database(_sync_job_diagnostics)
+integrity_check = _async_database(_sync_integrity_check)
 create_source = _async_database(_sync_create_source)
 get_source = _async_database(_sync_get_source)
 list_sources = _async_database(_sync_list_sources)
