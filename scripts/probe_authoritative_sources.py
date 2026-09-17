@@ -1,51 +1,50 @@
-"""Temporary structure-only probe for official dynamic sources; removed before merge."""
+"""Temporary structure-only probe for the official Wisconsin DOR delinquent-taxpayer API.
+Removed before integration.
+"""
 from __future__ import annotations
-import re
-from urllib.parse import urljoin, urlsplit
+
+import json
+from urllib.parse import urlencode, urlsplit
+
 import httpx
-from bs4 import BeautifulSoup
 
+API = "https://ww2.revenue.wi.gov/WebServicesPublicWeb/rest/delinquents/all"
 UA = "ParalegalResearchDesk-POC-OfficialSourceValidation/1.0"
-URLS = {
-    "fl_suspended": "https://www.dms.myflorida.com/business_operations/state_purchasing/state_agency_resources/vendor_registration_and_vendor_lists/suspended_vendor_list",
-    "fl_convicted": "https://www.dms.myflorida.com/business_operations/state_purchasing/state_agency_resources/vendor_registration_and_vendor_lists/convicted_vendor_list",
-    "wi_dor": "https://www.revenue.wi.gov/Pages/Delqlist/DelqSearch.aspx",
-}
 
-with httpx.Client(headers={"User-Agent": UA}, timeout=20, follow_redirects=True, trust_env=False) as client:
-    for label,url in URLS.items():
-        try:
-            r=client.get(url)
-            print(f"GET {label} {r.status_code} {r.headers.get('content-type','').split(';')[0]} {len(r.content)}")
-            r.raise_for_status()
-        except Exception as exc:
-            print(label,"ERROR",type(exc).__name__)
-            continue
-        soup=BeautifulSoup(r.text,"lxml")
-        scripts=[]
-        for s in soup.find_all("script"):
-            if s.get("src"):
-                scripts.append(urljoin(str(r.url),s["src"]))
-        print(label,"script_hosts",sorted({urlsplit(x).hostname for x in scripts}),"script_paths",[urlsplit(x).path for x in scripts if urlsplit(x).hostname==urlsplit(url).hostname][-12:])
-        needles=("liability_amt","Building Maintenance of America","There are currently no vendors on this list","DelqSearch","delq","ajax","api")
-        for s in soup.find_all("script"):
-            text=s.string or s.get_text(" ")
-            low=text.casefold()
-            hits=[n for n in needles if n.casefold() in low]
-            if not hits: continue
-            compact=re.sub(r"\s+"," ",text)
-            indexes=[low.find(n.casefold()) for n in hits if low.find(n.casefold())>=0]
-            index=min(indexes) if indexes else 0
-            start=max(0,index-600); end=min(len(compact),index+1800)
-            print(label,"inline_hits",hits,"snippet",compact[start:end])
-        for src in scripts:
-            if urlsplit(src).hostname != urlsplit(url).hostname: continue
-            try:
-                js=client.get(src)
-                if js.status_code!=200 or len(js.content)>3_000_000: continue
-            except Exception: continue
-            low=js.text.casefold()
-            hits=[n for n in needles if n.casefold() in low]
-            if not hits: continue
-            index=min(low.find(n.casefold()) for n in hits if low.find(n.casefold())>=0)
-            print(label,"external_hits",urlsplit(src).path,hits,"snippet",re.sub(r"\s+"," ",js.text[max(0,index-700):index+2200]))
+
+def probe(client: httpx.Client, search: str, rn_high: int = 1) -> None:
+    params = {
+        "search": search,
+        "city": "",
+        "rn_low": 1,
+        "rn_high": rn_high,
+        "sort": "name",
+        "revoked": "false",
+    }
+    response = client.get(API, params=params)
+    print(
+        "GET",
+        urlsplit(str(response.url)).hostname,
+        urlsplit(str(response.url)).path,
+        response.status_code,
+        response.headers.get("content-type", "").split(";")[0],
+        len(response.content),
+    )
+    response.raise_for_status()
+    payload = response.json()
+    subjects = payload.get("subject") or []
+    print(
+        "result=", payload.get("result"),
+        "count_type=", type(payload.get("count")).__name__,
+        "subject_len=", len(subjects),
+        "subject_keys=", sorted(subjects[0].keys()) if subjects else [],
+    )
+    if subjects:
+        print("subject_types=", {key: type(value).__name__ for key, value in subjects[0].items()})
+
+
+with httpx.Client(headers={"User-Agent": UA, "Accept": "application/json"}, timeout=20, follow_redirects=False, trust_env=False) as client:
+    # Impossible query proves the no-match response shape without logging any taxpayer data.
+    probe(client, "ZZZ-NO-SUCH-VENDOR-OPENAI-987654", 1)
+    # A broad entity suffix is used only to inspect the returned field names/types; values are never logged.
+    probe(client, "LLC", 1)
