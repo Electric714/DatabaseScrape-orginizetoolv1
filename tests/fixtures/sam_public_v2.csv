@@ -1,0 +1,4 @@
+Exclusion ID,Classification,Name,Aliases,UEI,CAGE Code,Address 1,City,State,ZIP Code,Exclusion Type,Exclusion Program,Excluding Agency,Record Status,Active Date,Termination Date
+EX-100,Firm,Example Builders LLC,Example Construction,ABCDEF123456,1A2B3,12 Oak Rd,Madison,WI,53703,Ineligible (Proceedings Completed),Reciprocal,GSA,Active,2025-01-02,
+EX-101,Firm,Example Builders LLC,,ABCDEF123456,1A2B3,12 Oak Rd,Madison,WI,53703,Statutory,Nonprocurement,EPA,Active,2026-01-01,
+EX-200,Firm,Unrelated Company,,,,99 Elsewhere,Denver,CO,80202,Other,Other,Agency,Active,2025-01-01,

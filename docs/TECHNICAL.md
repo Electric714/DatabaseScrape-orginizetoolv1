@@ -164,3 +164,8 @@ Site-specific adapters are selected in `app/adapters.py`. The adapter registry i
 
 Use the software only for sources the operator is authorized to access and automate. Configure crawl rates appropriately for each source and comply with applicable terms, privacy obligations, data-retention requirements, and law-firm policies.
 
+
+
+## SAM Exclusions Public V2 extract
+
+The SAM collector obtains the official Data Services listing, rejects Historical and FASCSA packages, validates and atomically caches the newest daily Public V2 ZIP, and streams its CSV. Archive/schema/status failures make the run incomplete. Matching is limited to approved master bidders: exact UEI/CAGE is preferred, otherwise exact approved name or alias plus location is required. Ambiguous candidates remain review evidence; unmatched extract entities never create master or research rows. A confirmed active federal exclusion can propose `Y`, while absence never writes `N` to the combined state/federal field.

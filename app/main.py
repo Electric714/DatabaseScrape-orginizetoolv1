@@ -27,8 +27,6 @@ from .config import (
     BASE_DIR,
     dol_api_key_configured,
     save_dol_api_key,
-    sam_api_key_configured,
-    save_sam_api_key,
 )
 from .crawler import CrawlEngine, canonicalize_url
 from .security import PublicTransport, validate_public_url
@@ -36,14 +34,14 @@ from .runtime import single_instance
 from .models import OshaStatus, ResearchField, ScanOptions, SourceCreate, SourceUpdate
 from .bidder_schema import BIDDER_COLUMNS, bidder_row, parse_bidder_csv
 from .osha_adapter import DOL_INSPECTION_ENDPOINT
-from .sam_adapter import SAM_EXCLUSIONS_ENDPOINT, _payload as parse_sam_payload
+from .sam_adapter import SAM_DATA_SERVICES_ENDPOINT, SAM_EXCLUSIONS_ENDPOINT
 from .bbb_sitemap_adapter import BBB_SITEMAP_INDEX
 from .state_adapter import MN_URL
 from .state_sources import IL_URL, WI_URL
 from .violation_tracker_adapter import VT_URL
 from .source_catalog import SOURCE_CATALOG, field_map
 from .adapters import adapter_for_url
-from .config import get_dol_api_key, get_sam_api_key
+from .config import get_dol_api_key
 
 TASKS: dict[int, asyncio.Task] = {}
 SCHEDULER_TASK: asyncio.Task | None = None
@@ -51,10 +49,6 @@ SCAN_LOCK = asyncio.Lock()
 
 
 class DolApiKeyPayload(BaseModel):
-    api_key: str = Field(min_length=10, max_length=512)
-
-
-class SamApiKeyPayload(BaseModel):
     api_key: str = Field(min_length=10, max_length=512)
 
 
@@ -122,7 +116,7 @@ async def ensure_builtin_sam_source() -> dict:
     existing = next((source for source in sources if _is_sam_source(source)), None)
     desired = {
         "name": SAM_SOURCE_NAME,
-        "start_url": SAM_EXCLUSIONS_ENDPOINT,
+        "start_url": SAM_DATA_SERVICES_ENDPOINT,
         "auto_scan": False,
         "interval_minutes": 1440,
         "max_pages": 5000,
@@ -180,9 +174,6 @@ async def ensure_builtin_bbb_source() -> dict:
     return await db.create_source(desired)
 
 
-SAM_KEY_VALIDATION_FALLBACK = "https://api.sam.gov/contract-awards/v1/search"
-
-
 def _normalized_api_key(value: str) -> str:
     key = (value or "").strip()
     if len(key) < 10:
@@ -228,78 +219,6 @@ async def validate_dol_api_key(api_key: str) -> dict:
     if not isinstance(payload, (dict, list)):
         raise ValueError("DOL accepted the request but returned an unexpected metadata response")
     return {"validation_service": "dol-metadata", "upstream_available": True}
-
-
-async def validate_sam_api_key(api_key: str) -> dict:
-    """Validate a SAM public API key while distinguishing service failure from bad auth."""
-    key = _normalized_api_key(api_key)
-    try:
-        async with httpx.AsyncClient(
-            transport=PublicTransport(),
-            trust_env=False,
-            follow_redirects=False,
-            timeout=20.0,
-        ) as client:
-            response = await client.get(
-                SAM_EXCLUSIONS_ENDPOINT,
-                params={
-                    "api_key": key,
-                    "classification": "Firm",
-                    "recordStatus": "Active",
-                    "page": 0,
-                    "size": 1,
-                },
-                headers={"Accept": "application/json"},
-            )
-            if 200 <= response.status_code < 300:
-                if response.status_code != 204:
-                    parse_sam_payload(response.text)
-                return {
-                    "validation_service": "sam-exclusions",
-                    "exclusions_available": True,
-                }
-            if response.status_code in {401, 403}:
-                raise ValueError("SAM.gov rejected this API key")
-            if response.status_code == 429:
-                raise ValueError("SAM.gov rate limit reached; try the key again after the limit resets")
-
-            # OpenGSA still documents this exact Exclusions v4 URL, but clean live
-            # requests currently can receive HTTP 404. If that happens, verify only
-            # the credential against another official SAM public API using the same
-            # Public API Key. Do not claim Exclusions itself is healthy.
-            if response.status_code == 404 or response.status_code >= 500:
-                fallback = await client.get(
-                    SAM_KEY_VALIDATION_FALLBACK,
-                    params={
-                        "api_key": key,
-                        "awardeeUniqueEntityId": "000000000000",
-                        "limit": 1,
-                        "offset": 0,
-                    },
-                    headers={"Accept": "application/json"},
-                )
-                if fallback.status_code in {401, 403}:
-                    raise ValueError("SAM.gov rejected this API key")
-                if fallback.status_code == 429:
-                    raise ValueError("SAM.gov rate limit reached; try the key again after the limit resets")
-                if fallback.status_code in {200, 204}:
-                    return {
-                        "validation_service": "sam-contract-awards-fallback",
-                        "exclusions_available": False,
-                        "warning": (
-                            "SAM.gov accepted the API key, but its documented Exclusions endpoint "
-                            f"returned HTTP {response.status_code}. The key was saved; Exclusions collection "
-                            "may remain unavailable until SAM.gov restores that endpoint."
-                        ),
-                    }
-                raise ValueError(
-                    "SAM.gov public APIs are currently unavailable, so this key could not be validated; "
-                    "the key was not marked invalid"
-                )
-
-            raise ValueError(f"SAM.gov API key test could not be completed (HTTP {response.status_code})")
-    except (httpx.TimeoutException, httpx.NetworkError) as exc:
-        raise ValueError("Could not reach SAM.gov to test this key") from exc
 
 
 async def launch_scan(source_id: int, force_full: bool = False, master_ids=None) -> dict:
@@ -523,33 +442,6 @@ async def configure_dol_integration(payload: DolApiKeyPayload):
     return {"configured": True, "validated": True, "source_id": source["id"], **validation}
 
 
-@app.get("/api/integrations/sam")
-async def sam_integration_status():
-    source = await ensure_builtin_sam_source()
-    return {
-        "configured": sam_api_key_configured(),
-        "source_id": source["id"],
-        "source_name": SAM_SOURCE_NAME,
-        "endpoint": SAM_EXCLUSIONS_ENDPOINT,
-        "environment": "production",
-        "documentation_url": "https://open.gsa.gov/api/exclusions-api/",
-        "api_key_url": "https://sam.gov/profile/details",
-    }
-
-
-@app.post("/api/integrations/sam")
-async def configure_sam_integration(payload: SamApiKeyPayload):
-    key = _normalized_api_key(payload.api_key)
-    try:
-        validation = (await validate_sam_api_key(key)) or {}
-        save_sam_api_key(key)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    source = await ensure_builtin_sam_source()
-    activity.emit("INFO", "SAM.gov production Exclusions API key tested and saved", source_id=source["id"])
-    return {"configured": True, "validated": True, "source_id": source["id"], "environment": "production"}
-
-
 @app.get("/api/sources")
 async def get_sources():
     osha = await ensure_builtin_osha_source()
@@ -569,7 +461,7 @@ async def post_source(payload: SourceCreate):
     if hostname in OSHA_SOURCE_HOSTS:
         raise HTTPException(status_code=409, detail="OSHA is built in. Use the Set API key button on the OSHA card.")
     if hostname in SAM_SOURCE_HOSTS:
-        raise HTTPException(status_code=409, detail="SAM.gov Federal Debarment is built in. Use the SAM API key button.")
+        raise HTTPException(status_code=409, detail="SAM.gov Federal Debarment is built in. The daily Public V2 extract needs no credential.")
     if hostname in BBB_SOURCE_HOSTS:
         raise HTTPException(status_code=409, detail="BBB is built in. Use the BBB source card.")
     try:
@@ -921,13 +813,13 @@ async def source_catalog():
 
 @app.post("/api/integrations/{integration}/test")
 async def test_saved_key(integration: str):
-    if integration not in {"dol", "sam"}:
+    if integration != "dol":
         raise HTTPException(status_code=404, detail="Unknown integration")
-    key = get_dol_api_key() if integration == "dol" else get_sam_api_key()
+    key = get_dol_api_key()
     if not key:
         raise HTTPException(status_code=422, detail="API key missing")
     try:
-        await (validate_dol_api_key(key) if integration == "dol" else validate_sam_api_key(key))
+        await validate_dol_api_key(key)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {"validated": True, "integration": integration}

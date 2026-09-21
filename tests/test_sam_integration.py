@@ -1,273 +1,71 @@
-import json
-from urllib.parse import parse_qs, urlsplit
+import zipfile
+from pathlib import Path
 
-import httpx
+import pytest
 
-from app import bidder_master as bidder_db, database as db, main
-from app.bidder_schema import BIDDER_COLUMNS, bidder_row
-from app.crawler import CrawlEngine
-from app.models import SourceCreate, SourceUpdate
-from app.sam_adapter import (
-    SAM_EXCLUSIONS_ENDPOINT,
-    SAM_EXCLUSIONS_PATH,
-    SAM_MASTER_FIELDS,
-    SamExclusionsAdapter,
-)
+from app.sam_adapter import SAM_DATA_SERVICES_ENDPOINT, SamExclusionsAdapter, select_manifest_artifact
+from app.sam_extract import SamExtractError, iter_public_v2_rows
+
+FIXTURE = Path(__file__).parent / "fixtures" / "sam_public_v2.csv"
 
 
-SAM_MATCH = {
-    "totalRecords": 1,
-    "excludedEntity": [{
-        "exclusionDetails": {
-            "classificationType": "Firm",
-            "exclusionType": "Ineligible (Proceedings Completed)",
-            "exclusionProgram": "Reciprocal",
-            "excludingAgencyCode": "GSA",
-            "excludingAgencyName": "GENERAL SERVICES ADMINISTRATION",
-        },
-        "exclusionIdentification": {
-            "ueiSAM": "ABCDEF123456",
-            "cageCode": "1A2B3",
-            "entityName": "Example Builders LLC",
-        },
-        "exclusionActions": {
-            "listOfActions": [{
-                "createDate": "01-02-2025",
-                "updateDate": "04-05-2026",
-                "activateDate": "01-02-2025",
-                "terminationDate": None,
-                "terminationType": "Indefinite",
-                "recordStatus": "Active",
-            }]
-        },
-        "exclusionPrimaryAddress": {
-            "addressLine1": "12 Oak Rd",
-            "city": "Madison",
-            "stateOrProvinceCode": "WI",
-            "zipCode": "53703",
-            "countryCode": "USA",
-        },
-    }],
-    "links": {},
-}
-
-SAM_EMPTY = {"totalRecords": 0, "excludedEntity": [], "links": {}}
+def archive(tmp_path, name="public-v2.csv"):
+    target = tmp_path / "public-v2.zip"
+    with zipfile.ZipFile(target, "w") as value:
+        value.write(FIXTURE, name)
+    return target
 
 
-def bidder(**changes):
-    row = {column: "" for column in BIDDER_COLUMNS}
-    row.update({
-        "id": "1001",
-        "contractor_name": "Example Builders LLC",
-        "address_1": "12 Oak Rd",
-        "city": "Madison",
-        "state": "WI",
-        "zip": "53703",
-        "state_federal_debarment": "N",
-    })
-    row.update(changes)
+def bidder(**values):
+    row = {"id": "1", "contractor_name": "Example Builders LLC", "address_1": "12 Oak Rd",
+           "city": "Madison", "state": "WI", "zip": "53703", "uei": "ABCDEF123456", "cage_code": "1A2B3"}
+    row.update(values)
     return row
 
 
-def test_sam_adapter_uses_documented_production_endpoint_and_only_owns_combined_debarment(monkeypatch):
-    monkeypatch.setenv("SAM_API_KEY", "synthetic-sam-test-key")
+def test_manifest_deterministically_selects_latest_public_v2():
+    selected = select_manifest_artifact({"files": [
+        {"path": "Exclusions/Historical/", "fileName": "old.zip", "publicationTimestamp": "2026-09-21T00:00:00Z", "size": 1, "url": "https://sam.gov/old.zip"},
+        {"path": "Exclusions/Public V2/", "fileName": "a.zip", "publicationTimestamp": "2026-09-20T00:00:00Z", "size": 1, "contentType": "application/zip", "url": "https://sam.gov/a.zip"},
+        {"path": "Exclusions/Public V2/", "fileName": "b.zip", "publicationTimestamp": "2026-09-21T00:00:00Z", "size": 1, "contentType": "application/zip", "url": "https://sam.gov/b.zip"}]})
+    assert selected["file_name"] == "b.zip"
+    assert SamExclusionsAdapter.canonical_start_url == SAM_DATA_SERVICES_ENDPOINT
+
+
+def test_fixture_streams_and_matches_multiple_exclusions_without_creating_unrelated_master(tmp_path):
     adapter = SamExclusionsAdapter()
-
-    assert adapter.api_source is True
-    assert adapter.canonical_start_url == SAM_EXCLUSIONS_ENDPOINT
-    assert urlsplit(SAM_EXCLUSIONS_ENDPOINT).hostname == "api.sam.gov"
-    assert adapter.master_fields == ("state_federal_debarment",)
-    assert set(adapter.master_fields) == set(SAM_MASTER_FIELDS)
-    assert adapter.allowed_url(SAM_EXCLUSIONS_ENDPOINT)
-    assert not adapter.allowed_url("https://api.sam.gov/entity-information/v4/entities")
-
-    logical = adapter.seed_urls([bidder()])[0]
-    assert "synthetic-sam-test-key" not in logical
-    query = parse_qs(urlsplit(logical).query)
-    assert query["classification"] == ["Firm"]
-    assert query["recordStatus"] == ["Active"]
-    assert query["size"] == ["10"]
-    assert query["exclusionName"][0]
-
-    network = adapter.request_url(logical)
-    assert parse_qs(urlsplit(network).query)["api_key"] == ["synthetic-sam-test-key"]
-
-
-def test_sam_exact_active_match_writes_positive_only(monkeypatch):
-    monkeypatch.setenv("SAM_API_KEY", "synthetic-sam-test-key")
-    adapter = SamExclusionsAdapter()
-    query = adapter.seed_urls([bidder()])[0]
-
-    assert adapter.links(json.dumps(SAM_MATCH), query) == []
-    record, = adapter.finalize_records(complete=True)
-
-    assert record["company"] == "Example Builders LLC"
+    assert adapter.seed_urls([bidder()]) == [SAM_DATA_SERVICES_ENDPOINT]
+    adapter.process_artifact(archive(tmp_path), {"file_name": "public-v2.zip", "schema_version": "Public V2"})
+    record, = adapter.finalize_records(True)
     assert record["state_federal_debarment"] == "Y"
-    assert record["extra"]["environment"] == "production"
-    assert record["extra"]["federal_component_only"] is True
-    assert record["extra"]["negative_result_writes_combined_field"] is False
-    assert len(record["extra"]["active_federal_exclusions"]) == 1
-    assert set(record) & set(BIDDER_COLUMNS) == set(SAM_MASTER_FIELDS)
+    assert len(record["extra"]["confirmed_exclusions"]) == 2
+    assert all(item["exclusion_identifier"] != "EX-200" for item in record["extra"]["confirmed_exclusions"])
 
 
-def test_sam_clean_federal_search_does_not_write_false_combined_negative(monkeypatch):
-    monkeypatch.setenv("SAM_API_KEY", "synthetic-sam-test-key")
-    adapter = SamExclusionsAdapter()
-    query = adapter.seed_urls([bidder(state_federal_debarment="")])[0]
-
-    adapter.links(json.dumps(SAM_EMPTY), query)
-    record, = adapter.finalize_records(complete=True)
-
-    assert record.get("state_federal_debarment") == ""
-    assert record["extra"]["active_federal_exclusions"] == []
-    assert "state debarment still requires separate research" in record["extra"]["narrative"]
+def test_clean_and_incomplete_scans_are_positive_only(tmp_path):
+    adapter = SamExclusionsAdapter(); adapter.seed_urls([bidder(uei="OTHER", cage_code="OTHER", contractor_name="No Match LLC")])
+    adapter.process_artifact(archive(tmp_path), {"file_name": "public-v2.zip"})
+    assert adapter.finalize_records(True)[0]["state_federal_debarment"] == ""
+    adapter.extract_complete = False
+    incomplete = adapter.finalize_records(False)[0]
+    assert incomplete["state_federal_debarment"] == ""
+    assert incomplete["extra"]["complete_aggregate"] is False
 
 
-async def test_sam_api_crawl_proposes_only_positive_debarment_and_never_stores_key(database, monkeypatch):
-    monkeypatch.setenv("SAM_API_KEY", "integration-secret-sam-key")
-    baseline = bidder()
-    await bidder_db.import_rows("baseline.csv", [baseline], [])
-
-    source_data = SourceCreate(
-        name="SAM.gov Federal Debarment / Exclusions",
-        start_url=SAM_EXCLUSIONS_ENDPOINT,
-        delay_ms=0,
-        render_mode="http",
-        max_pages=100,
-        max_depth=2,
-        concurrency=1,
-        respect_robots=False,
-    ).model_dump(mode="json")
-    source = await db.create_source(source_data)
-
-    def site(request):
-        assert request.url.path == SAM_EXCLUSIONS_PATH
-        query = parse_qs(request.url.query.decode() if isinstance(request.url.query, bytes) else str(request.url.query))
-        assert query["api_key"] == ["integration-secret-sam-key"]
-        return httpx.Response(200, json=SAM_MATCH, headers={"content-type": "application/json"})
-
-    job_id = await db.create_job(source["id"], False)
-    await CrawlEngine(source, job_id, transport=httpx.MockTransport(site)).run()
-    job = await db.get_job(job_id)
-    assert job["status"] == "completed", job
-
-    records = await db.search_records(source_id=source["id"])
-    assert records["total"] == 1
-    stored = records["items"][0]
-    assert "integration-secret-sam-key" not in stored["source_url"]
-    projected = bidder_row(stored, fallback_id=False)
-    assert projected["state_federal_debarment"] == "Y"
-
-    # Inspect every persisted crawl URL directly. The contractor-level aggregate
-    # evidence URL need not be byte-for-byte identical to the canonical page-cache
-    # key, but no persisted page may contain the credential.
-    with db.connect() as conn:
-        page_urls = [
-            row["url"] for row in conn.execute(
-                "SELECT url FROM pages WHERE source_id=? ORDER BY id", (source["id"],)
-            ).fetchall()
-        ]
-    assert page_urls
-    assert all("integration-secret-sam-key" not in url for url in page_urls)
-    assert all("api_key=" not in url.lower() for url in page_urls)
-
-    result = await bidder_db.compare()
-    assert result["field_changes"] == 1
-    proposals = [
-        proposal for proposal in await bidder_db.list_proposals()
-        if proposal["proposal_type"] == "field_update"
-    ]
-    assert len(proposals) == 1
-    assert proposals[0]["field_name"] == "state_federal_debarment"
-    assert proposals[0]["new_value"] == "Y"
+def test_zip_traversal_and_duplicate_headers_are_rejected(tmp_path):
+    bad = tmp_path / "bad.zip"
+    with zipfile.ZipFile(bad, "w") as value:
+        value.writestr("../escape.csv", FIXTURE.read_bytes())
+    with pytest.raises(SamExtractError, match="unsafe path"):
+        list(iter_public_v2_rows(bad, max_uncompressed=100000))
+    duplicate = tmp_path / "duplicate.zip"
+    with zipfile.ZipFile(duplicate, "w") as value:
+        value.writestr("x.csv", "Exclusion ID,Classification,Name,Name,Record Status\n1,Firm,A,A,Active\n")
+    with pytest.raises(SamExtractError, match="duplicate headers"):
+        list(iter_public_v2_rows(duplicate, max_uncompressed=100000))
 
 
-async def test_builtin_sam_source_is_created_once_and_locked(database):
-    first = await main.ensure_builtin_sam_source()
-    second = await main.ensure_builtin_sam_source()
-    sources = await database.list_sources()
-
-    assert first["id"] == second["id"]
-    assert first["name"] == main.SAM_SOURCE_NAME
-    assert first["start_url"] == SAM_EXCLUSIONS_ENDPOINT
-    assert first["render_mode"] == "http"
-    assert not bool(first["respect_robots"])
-    assert len([source for source in sources if main._is_sam_source(source)]) == 1
-
-    try:
-        await main.patch_source(first["id"], SourceUpdate(name="Changed SAM"))
-    except Exception as exc:
-        assert getattr(exc, "status_code", None) == 409
-    else:
-        raise AssertionError("Built-in SAM source should not be editable")
-
-    try:
-        await main._delete_source(first["id"])
-    except Exception as exc:
-        assert getattr(exc, "status_code", None) == 409
-    else:
-        raise AssertionError("Built-in SAM source should not be removable")
-
-    duplicate = SourceCreate(
-        name="Duplicate SAM",
-        start_url=SAM_EXCLUSIONS_ENDPOINT,
-        render_mode="http",
-        respect_robots=False,
-    )
-    try:
-        await main.post_source(duplicate)
-    except Exception as exc:
-        assert getattr(exc, "status_code", None) == 409
-        assert "built in" in str(getattr(exc, "detail", "")).lower()
-    else:
-        raise AssertionError("Generic source setup should not create a second SAM source")
-
-
-async def test_sam_api_key_is_validated_before_save_and_never_returned(database, monkeypatch):
-    observed = {}
-    saved = {}
-
-    async def fake_validate(value):
-        observed["value"] = value
-
-    def fake_save(value):
-        saved["value"] = value
-
-    monkeypatch.setattr(main, "validate_sam_api_key", fake_validate)
-    monkeypatch.setattr(main, "save_sam_api_key", fake_save)
-    monkeypatch.setattr(main, "sam_api_key_configured", lambda: True)
-
-    result = await main.configure_sam_integration(
-        main.SamApiKeyPayload(api_key="synthetic-valid-sam-key")
-    )
-    assert observed["value"] == "synthetic-valid-sam-key"
-    assert saved["value"] == "synthetic-valid-sam-key"
-    assert result["configured"] is True
-    assert result["validated"] is True
-
-    status = await main.sam_integration_status()
-    assert status["configured"] is True
-    assert "api_key" not in status
-    assert "synthetic-valid-sam-key" not in json.dumps(status)
-
-
-async def test_rejected_sam_key_is_not_saved(database, monkeypatch):
-    saved = []
-
-    async def fake_validate(_value):
-        raise ValueError("SAM.gov rejected this API key")
-
-    monkeypatch.setattr(main, "validate_sam_api_key", fake_validate)
-    monkeypatch.setattr(main, "save_sam_api_key", lambda value: saved.append(value))
-
-    try:
-        await main.configure_sam_integration(
-            main.SamApiKeyPayload(api_key="synthetic-invalid-sam-key")
-        )
-    except Exception as exc:
-        assert getattr(exc, "status_code", None) == 422
-        assert "rejected" in str(getattr(exc, "detail", "")).lower()
-    else:
-        raise AssertionError("Invalid SAM key should be rejected")
-
-    assert saved == []
+def test_redirect_host_validation():
+    assert SamExclusionsAdapter._validated_download_url("https://files.sam.gov/public.zip")
+    with pytest.raises(ValueError, match="unapproved"):
+        SamExclusionsAdapter._validated_download_url("https://evil.example/public.zip")

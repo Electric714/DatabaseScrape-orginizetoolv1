@@ -21,6 +21,7 @@ from .adapters import adapter_for_url
 from .config import ASSET_EXTENSIONS, DEFAULT_TIMEOUT_SECONDS, DEFAULT_USER_AGENT, MAX_BODY_BYTES
 from .security import PublicTransport
 from .normalizer import entity_key, record_hash
+from .errors import SourceAcquisitionError
 
 _HOST_GATES = weakref.WeakKeyDictionary()
 
@@ -250,8 +251,10 @@ class CrawlEngine:
         self.record_digests = {}
         self.processed = 0
         self.limited = False
+        self.acquisition_stage = AcquisitionStage.PREPARE
         self.transport = transport  # Test dependency injection; never exposed by API.
         self.renderer = BrowserRenderer(self)
+        self.failures = []
         self.adapter = adapter_for_url(self.start_url)
         canonical_start = getattr(self.adapter, "canonical_start_url", None)
         if canonical_start:
@@ -271,6 +274,8 @@ class CrawlEngine:
         await db.update_job(
             self.job_id,
             heartbeat_at=db.utcnow(),
+            acquisition_stage=AcquisitionStage.PREPARE.value,
+            acquisition_status=AcquisitionStatus.RUNNING.value,
             acquisition_limits_json=json.dumps({
                 "max_pages": self.max_pages, "max_depth": self.max_depth, "concurrency": self.concurrency,
                 "delay_ms": int(self.delay * 1000), "force_full": bool(self.force_full),
@@ -286,7 +291,10 @@ class CrawlEngine:
                 transport=self.transport or PublicTransport(), trust_env=False, follow_redirects=False,
                 timeout=DEFAULT_TIMEOUT_SECONDS, headers={"User-Agent": DEFAULT_USER_AGENT},
             ) as client:
-                if getattr(self.adapter, "api_source", False):
+                if getattr(self.adapter, "artifact_source", False):
+                    activity.emit("INFO", "Using official binary artifact source; robots.txt is not applicable",
+                                  source_id=self.source_id, job_id=self.job_id, url=self.start_url)
+                elif getattr(self.adapter, "api_source", False):
                     activity.emit(
                         "INFO", "Using authenticated public API source; robots.txt is not applicable",
                         source_id=self.source_id, job_id=self.job_id, url=self.start_url,
@@ -297,8 +305,25 @@ class CrawlEngine:
                         source_id=self.source_id, job_id=self.job_id, url=self.start_url,
                     )
                 else:
+                    await self._set_stage(AcquisitionStage.POLICY)
                     await self._load_robots(client)
-                if getattr(self.adapter, "query_mode", False):
+                if getattr(self.adapter, "artifact_source", False):
+                    master_rows = await bidder_master_db.all_rows()
+                    if self.master_ids is not None:
+                        master_rows = [r for r in master_rows if r["_master_id"] in self.master_ids]
+                    if not master_rows:
+                        raise ValueError("Import the master bidder CSV before running the extract scan")
+                    self.adapter.seed_urls(master_rows)
+                    try:
+                        await self.adapter.acquire(client)
+                        self.processed = 1
+                    except Exception as exc:
+                        self.adapter.incomplete_reason = self.adapter.incomplete_reason or str(exc)
+                        await db.increment_job(self.job_id, errors=1)
+                        activity.emit("ERROR", "Binary artifact could not be validated", source_id=self.source_id,
+                                      job_id=self.job_id, error=str(exc))
+                    frontier = []
+                elif getattr(self.adapter, "query_mode", False):
                     master_rows = await bidder_master_db.all_rows()
                     if self.master_ids is not None:
                         master_rows = [r for r in master_rows if r["_master_id"] in self.master_ids]
@@ -313,6 +338,7 @@ class CrawlEngine:
                         contractors=len(master_rows), query_pages=len(frontier),
                     )
                 else:
+                    await self._set_stage(AcquisitionStage.DISCOVERY)
                     activity.emit("INFO", "Crawl policy checked; discovering sitemap links", source_id=self.source_id, job_id=self.job_id)
                     frontier = [self.start_url, *await self._discover_sitemap_urls(client)]
                 await db.seed_frontier(self.job_id, self.source_id, [canonicalize_url(url) for url in frontier if canonicalize_url(url)], 0)
@@ -348,10 +374,14 @@ class CrawlEngine:
                 complete = not self.limited and not job["errors"]
                 if hasattr(self.adapter, "finalize_records"):
                     try:
+                        await self._set_stage(AcquisitionStage.FINALIZE)
                         final_records = self.adapter.finalize_records(complete=complete)
                         await self._store_final_records(final_records)
                     except Exception as exc:
+                        failure = self._failure(exc, "finalize", self.start_url, "internal_error", False)
+                        self.failures.append(failure)
                         await db.increment_job(self.job_id, errors=1)
+                        await self._record_failure(failure)
                         activity.emit(
                             "ERROR", "Source adapter could not finalize contractor findings",
                             source_id=self.source_id, job_id=self.job_id, error=str(exc),
@@ -367,11 +397,16 @@ class CrawlEngine:
                 completeness = {
                     "complete": complete, "limited": self.limited, "errors": int(job["errors"]),
                     "pages_processed": self.processed, "missing_records_marked_inactive": bool(complete and self.master_ids is None),
+                    "blockers": [f.public_dict() for f in self.failures],
                 }
+                first = self.failures[0] if self.failures else None
                 await db.transition_job(
                     self.job_id, final_status,
-                    message=f"{self.processed} pages processed. " + ("Crawl boundary exhausted." if complete else "Limits or errors prevented a complete scan; missing records were not marked inactive."),
+                    message=(f"{first.source_name} / {first.stage}: {first.safe_message}" if first else
+                             f"{self.processed} pages processed. Crawl boundary exhausted."),
                     completeness_json=json.dumps(completeness, sort_keys=True),
+                    acquisition_stage=AcquisitionStage.FINALIZE.value,
+                    acquisition_status=(AcquisitionStatus.COMPLETE if complete else AcquisitionStatus.INCOMPLETE).value,
                 )
                 await db.record_job_diagnostic(
                     self.job_id, "INFO" if complete else "WARNING", "completion",
@@ -386,6 +421,7 @@ class CrawlEngine:
                 await db.transition_job(
                     self.job_id, "interrupted", message=reason, restart_reason=reason,
                     completeness_json=json.dumps({"complete": False, "reason": "application_shutdown"}),
+                    acquisition_status=AcquisitionStatus.INCOMPLETE.value,
                 )
                 await db.record_job_diagnostic(
                     self.job_id, "WARNING", "interruption", reason, source_id=self.source_id,
@@ -400,12 +436,15 @@ class CrawlEngine:
                 )
             raise
         except Exception as exc:
-            safe_error = activity.redact(str(exc))
+            failure = exc if isinstance(exc, SourceAcquisitionError) else self._failure(exc, "finalize", self.start_url)
+            safe_error = failure.safe_message
+            if failure not in self.failures:
+                self.failures.append(failure)
+                await self._record_failure(failure)
             activity.emit("ERROR", "Scan failed", source_id=self.source_id, job_id=self.job_id, error=safe_error)
             await db.increment_job(self.job_id, errors=1)
             await db.transition_job(self.job_id, "failed", message=safe_error[:1000],
-                                    completeness_json=json.dumps({"complete": False, "reason": "failed"}))
-            await db.record_job_diagnostic(self.job_id, "ERROR", "failure", safe_error, source_id=self.source_id)
+                                    completeness_json=json.dumps({"complete": False, "reason": "failed", "blockers": [f.public_dict() for f in self.failures]}))
             raise
         finally:
             await self.renderer.close()
@@ -426,42 +465,15 @@ class CrawlEngine:
             activity.emit("INFO", "Page processed", source_id=self.source_id, job_id=self.job_id, url=url, links=len(links))
             return links
         except Exception as exc:
-            safe_error = activity.redact(str(exc))
-            category = "page_error"
-            lowered = safe_error.lower()
-            if "http 401" in lowered or "http 403" in lowered or "access challenge" in lowered or "access denied" in lowered:
-                category = "access_block"
-            elif "http 429" in lowered:
-                category = "rate_limit"
-            elif "response exceeds" in lowered or "decoder" in lowered or "unrecognized" in lowered:
-                category = "malformed_response"
+            failure = exc if isinstance(exc, SourceAcquisitionError) else self._failure(exc, "parse", url)
+            self.failures.append(failure)
+            safe_error, category = failure.safe_message, failure.category
             await db.frontier_state(self.job_id, url, "failed", last_error=safe_error[:1000])
-            await db.record_job_diagnostic(
-                self.job_id, "ERROR", category, safe_error, source_id=self.source_id, url=url,
-                retryable=False, details={"depth": depth},
-            )
+            await self._record_failure(failure, {"depth": depth})
             activity.emit("ERROR", "Page could not be processed", source_id=self.source_id, job_id=self.job_id, url=url, error=safe_error)
             await db.increment_job(self.job_id, errors=1)
             await db.upsert_page(self.source_id, url, last_error=safe_error[:1000])
-            note = getattr(self.adapter, "note_acquisition", None)
-            access_block = category == "access_block"
-            if note and access_block:
-                status_match = re.search(r"HTTP\s+(\d{3})", safe_error, re.I)
-                status = int(status_match.group(1)) if status_match else None
-                challenge = "cloudflare_or_interstitial" if "challenge" in lowered or "access denied" in lowered else "http_forbidden"
-                note(url, status=status, challenge=challenge, blocked=True)
-                await db.record_job_diagnostic(
-                    self.job_id, "ERROR", "bbb_acquisition", "BBB acquisition circuit opened",
-                    source_id=self.source_id, url=url, retryable=False,
-                    details={"stage": self.adapter.blocked_stage, "upstream_status": status,
-                             "challenge_classification": challenge, "circuit_breaker": "opened",
-                             "cache_used": bool(getattr(self.adapter, "cache_used", False))},
-                )
-                return []
-            if getattr(self.adapter, "fail_fast_access_errors", False) and (
-                "HTTP 401" in safe_error or "HTTP 403" in safe_error or "HTTP 429" in safe_error
-                or "access challenge" in safe_error.lower()
-            ):
+            if getattr(self.adapter, "fail_fast_access_errors", False) and category in {"access_block", "rate_limit"}:
                 raise
             return []
         finally:
@@ -470,6 +482,7 @@ class CrawlEngine:
             await db.update_job(self.job_id, heartbeat_at=db.utcnow())
 
     async def _process_url(self, client, url):
+        await self._set_stage(AcquisitionStage.DOWNLOAD)
         cached = await db.get_page(self.source_id, url)
         result = await self._fetch(client, url, cached)
         note = getattr(self.adapter, "note_acquisition", None)
@@ -486,27 +499,39 @@ class CrawlEngine:
             await db.upsert_page(self.source_id, url, last_error=None)
             return json.loads(cached.get("discovered_links") or "[]")
         if result.status >= 400:
-            raise ValueError(f"HTTP {result.status}")
+            category = "access_block" if result.status in {401, 403} else "rate_limit" if result.status == 429 else "upstream_5xx" if result.status >= 500 else "internal_error"
+            raise self._failure(Exception(f"Upstream returned HTTP {result.status}"), self._stage_for(url), url,
+                                category, result.status in {429, 500, 502, 503, 504}, status=result.status, attempt=4 if result.status in {429,500,502,503,504} else 1)
         decoder = getattr(self.adapter, "decode_body", None)
         if decoder:
-            decoded = decoder(result.body, result.headers, result.url)
+            try:
+                decoded = decoder(result.body, result.headers, result.url)
+            except Exception as exc:
+                archive = urlsplit(url).path.lower().endswith((".zip", ".gz", ".xlsx"))
+                raise self._failure(exc, "archive_validation" if archive else "parse", url,
+                                    "archive_invalid" if archive else "parse_error", False, status=result.status) from exc
             if not isinstance(decoded, str):
                 raise ValueError("Source adapter body decoder must return text")
             result.text = decoded
         if CHALLENGE.search(result.text):
-            raise ValueError("Explicit access challenge detected; no rendering attempted")
+            raise self._failure(Exception("Explicit access challenge detected; no rendering attempted"),
+                                self._stage_for(url), url, "access_block", False, status=result.status)
         digest_source = result.body if decoder else result.text.encode()
         digest = hashlib.sha256(digest_source).hexdigest()
         if cached and cached.get("content_hash") == digest and not self.force_full and not getattr(self.adapter, "always_parse", False):
             await self._touch_cached(url)
             links = json.loads(cached.get("discovered_links") or "[]")
         else:
+            await self._set_stage(AcquisitionStage.PARSE)
             # Invalidate before persisting records. A crash cannot reuse an old
             # page cache with newly replaced record associations.
             await db.upsert_page(self.source_id, url, content_hash=None, etag=None, last_modified=None)
             links = list(dict.fromkeys(canonicalize_url(u) for u in self.adapter.links(result.text, result.url)))
             links = [u for u in links if self._allowed_url(u)]
-            records = self.adapter.extract(result.text, result.url)
+            try:
+                records = self.adapter.extract(result.text, result.url)
+            except Exception as exc:
+                raise self._failure(exc, "parse", url, "parse_error", False, status=result.status) from exc
             await db.increment_job(self.job_id, records_found=len(records))
             for record in records:
                 self._register_record(entity_key(record), record_hash(record))
@@ -519,6 +544,13 @@ class CrawlEngine:
             last_modified=None if result.rendered else result.headers.get("last-modified"),
             content_hash=digest, discovered_links=json.dumps(links), last_error=None, rendered=int(result.rendered), fetch_mode=self.render_mode)
         return links
+
+    async def _set_stage(self, stage: AcquisitionStage) -> None:
+        self.acquisition_stage = stage
+        await db.update_job(
+            self.job_id, acquisition_stage=stage.value,
+            acquisition_status=AcquisitionStatus.RUNNING.value, heartbeat_at=db.utcnow(),
+        )
 
     async def _store_final_records(self, records):
         if not records:
@@ -627,7 +659,7 @@ class CrawlEngine:
                         async for chunk in response.aiter_bytes(chunk_size=65536):
                             body.extend(chunk)
                             if len(body) > MAX_BODY_BYTES:
-                                raise ValueError("Response exceeds body limit")
+                                raise self._failure(Exception("Response exceeds configured body limit"), self._stage_for(url), url, "content_limit", False, status=response.status_code, attempt=attempt + 1)
                         try:
                             kind = response.headers.get("content-type", "")
                             if "charset=" not in kind.lower() and ("html" in kind or "xml" in kind):
@@ -648,7 +680,7 @@ class CrawlEngine:
                         )
                         break
                     await db.record_retry(
-                        self.job_id, url, attempt + 1, f"HTTP {result.status}", source_id=self.source_id
+                        self.job_id, url, attempt + 1, f"{'rate_limit' if result.status == 429 else 'upstream_5xx'}: HTTP {result.status}", source_id=self.source_id
                     )
                     wait = min(2 ** attempt, 20)
                     retry = result.headers.get("retry-after", "")
@@ -666,15 +698,16 @@ class CrawlEngine:
                             self.job_id, "ERROR", "retry_exhausted", type(exc).__name__,
                             source_id=self.source_id, url=url, retryable=True, attempt_no=attempt + 1,
                         )
-                        raise
+                        category = "timeout" if isinstance(exc, httpx.TimeoutException) else "network"
+                        raise self._failure(exc, self._stage_for(url), url, category, True, attempt=attempt + 1) from exc
                     await db.record_retry(
-                        self.job_id, url, attempt + 1, type(exc).__name__, source_id=self.source_id
+                        self.job_id, url, attempt + 1, f"{'timeout' if isinstance(exc, httpx.TimeoutException) else 'network'}: {type(exc).__name__}", source_id=self.source_id
                     )
                     await asyncio.sleep(2 ** attempt)
             if redirects and result.status in {301, 302, 303, 307, 308}:
                 location = result.headers.get("location")
                 if not location:
-                    raise ValueError("Redirect without Location")
+                    raise self._failure(Exception("Redirect response omitted Location"), self._stage_for(url), url, "redirect_policy", False, status=result.status)
                 url = urljoin(url, location)
                 headers = {}
                 request_headers = getattr(self.adapter, "request_headers", None)
@@ -689,7 +722,7 @@ class CrawlEngine:
                 if kind and not normal and not adapter_ok:
                     raise ValueError("Unsupported response content type")
             return result
-        raise ValueError("Too many redirects")
+        raise self._failure(Exception("Redirect policy rejected too many redirects"), self._stage_for(url), url, "redirect_policy", False)
 
     async def _throttle(self):
         gates = _HOST_GATES.setdefault(asyncio.get_running_loop(), {})
@@ -706,7 +739,8 @@ class CrawlEngine:
         if result.status in {404, 410}:
             return
         if result.status != 200 or CHALLENGE.search(result.text):
-            raise ValueError(f"Cannot establish robots.txt policy: HTTP {result.status}")
+            category = "access_block" if result.status in {401, 403} or CHALLENGE.search(result.text) else "upstream_5xx" if result.status >= 500 else "internal_error"
+            raise self._failure(Exception(f"Cannot establish robots.txt policy: HTTP {result.status}"), "robots", result.url, category, False, status=result.status)
         parser = RobotFileParser()
         parser.parse(result.text.splitlines())
         self.robot_parser = parser
@@ -735,7 +769,8 @@ class CrawlEngine:
             if result.status in {404, 410}:
                 return
             if result.status != 200:
-                raise ValueError(f"Sitemap HTTP {result.status}")
+                raise self._failure(Exception(f"Sitemap HTTP {result.status}"), "sitemap_child" if depth else "sitemap_index", url,
+                                    "access_block" if result.status in {401,403} else "upstream_5xx" if result.status >= 500 else "internal_error", False, status=result.status)
             parser = etree.XMLParser(resolve_entities=False, no_network=True, load_dtd=False)
             root = etree.fromstring(result.body, parser)
             kind = etree.QName(root).localname
@@ -752,6 +787,37 @@ class CrawlEngine:
                         break
                     discovered.append(candidate)
         except Exception as exc:
+            failure = exc if isinstance(exc, SourceAcquisitionError) else self._failure(exc, "sitemap_child" if depth else "sitemap_index", url, "schema_drift", False)
+            self.failures.append(failure)
+            await self._record_failure(failure)
             await db.increment_job(self.job_id, errors=1)
-            await db.upsert_page(self.source_id, url, last_error=f"Sitemap: {exc}"[:1000])
+            await db.upsert_page(self.source_id, url, last_error=f"Sitemap: {failure.safe_message}"[:1000])
             activity.emit("ERROR", "Sitemap could not be read", job_id=self.job_id, source_id=self.source_id, url=url, error=str(exc))
+
+    def _stage_for(self, url):
+        path = urlsplit(url).path.lower()
+        if "profile" in path: return "profile"
+        if "complaint" in path: return "complaints"
+        if "search" in path: return "search"
+        if "result" in path: return "results"
+        if path.endswith((".zip", ".csv", ".xlsx", ".json")): return "artifact_download"
+        return "detail"
+
+    def _failure(self, exc, stage, url, category="internal_error", retryable=False, *, status=None, attempt=1):
+        return SourceAcquisitionError(
+            source_id=self.source_id, source_name=self.source.get("name") or "Unknown source",
+            stage=stage, logical_url=url, upstream_host=urlsplit(url).hostname if url else None,
+            http_method="GET", upstream_status=status, category=category,
+            acquisition_mode="browser" if self.render_mode == "browser" else "http",
+            retryable=retryable, attempt_no=attempt, safe_message=str(exc) or type(exc).__name__,
+            exception_type=type(exc).__name__,
+        )
+
+    async def _record_failure(self, failure, extra=None):
+        details = failure.public_dict()
+        details.update(extra or {})
+        await db.record_job_diagnostic(
+            self.job_id, "ERROR", failure.category, failure.safe_message,
+            source_id=self.source_id, url=failure.logical_url, retryable=failure.retryable,
+            attempt_no=failure.attempt_no, details=details,
+        )
