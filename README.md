@@ -1,8 +1,8 @@
 # Paralegal Database Tool
 
-## Current proof-of-concept status (2026-09-14)
+## Current proof-of-concept status (updated 2026-09-21)
 
-**Read [the current POC review](docs/POC-REVIEW.md) first.** It supersedes the older implementation notes below. The master CSV is the only contractor list. Select contractors before research; source-owned findings are compared separately. PACER is excluded, OSHA/DOL share one collector, Minnesota OSP is implemented, Illinois IDOL and Wisconsin WisDOT collectors are implemented, and Violation Tracker has a provisional HTML adapter. SAM Alpha is test evidence only. BBB/Violation Tracker live access is blocked; API lookups need credentials. Overall retrieval feasibility is not yet proven.
+**Read [the current POC review](docs/POC-REVIEW.md) first.** It supersedes the older implementation notes below. The master CSV is the only contractor list. Select contractors before research; source-owned findings are compared separately. PACER is excluded, OSHA/DOL share one collector, and Minnesota OSP, Illinois IDOL, and Wisconsin WisDOT collectors are implemented. SAM Alpha is test evidence only. BBB live access is blocked, API lookups need credentials, and Violation Tracker is disabled pending the formal discovery gate in [its request-flow record](docs/VIOLATION-TRACKER.md). Overall retrieval feasibility is not yet proven.
 
 The review records aggregate validation outcomes and limits without publishing contractor-specific evidence. Research does not add contractors or infer clean results from blocked/partial searches.
 
@@ -87,7 +87,7 @@ SAM.gov Federal Debarment is a built-in integration using the official **v4 prod
 
 The adapter submits targeted `classification=Firm`, `recordStatus=Active`, and `exclusionName` queries for each approved contractor and related company. It performs conservative normalized company-name matching and uses the bidder address/state/city/ZIP only for disambiguation when necessary.
 
-SAM requires an API key as the `api_key` query parameter. The built-in SAM card has a **Set SAM API key** control; the app validates the key against the official production endpoint before saving it to `.runtime/sam_api_key.txt`. `SAM_API_KEY` may also be supplied as an environment variable.
+SAM federal exclusions use the credential-free daily **Exclusions / Public V2** artifact. The collector validates the official file listing and archive before atomic cache replacement, records the artifact hash and publication/retrieval timestamps, and reports retained-cache age when a refresh fails. Only confirmed active matches may propose `Y`; a clean federal scan never writes `N` to the combined state/federal field.
 
 Because SAM requires the credential in the query string, the crawler uses a credential-injection hook: stored source URLs, page-cache URLs, record evidence, activity events, diagnostics, and bidder exports contain the credential-free logical URL. The API key is added only to the outbound network request.
 
@@ -183,6 +183,4 @@ Install Python 3.11 or newer, then run **bash scripts/start-unix.sh** from the e
 - [Interface, logging, and setup details](docs/INTERFACE-AND-SETUP.md)
 
 This remains a single-process local proof of concept. The database/review workflow is substantially implemented; the six source integrations still require real-site adapters before collection can be considered production-ready. A completed generic scan means the configured traversal finished, not that every relevant legal/public record has been found. Use only permitted public sources.
-
-
 
