@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 from collections import defaultdict
 from difflib import SequenceMatcher
 from urllib.parse import parse_qs, urlencode, urljoin, urlsplit, urlunsplit
+from datetime import datetime, timezone
 
 from bs4 import BeautifulSoup
 
@@ -313,6 +315,9 @@ def _profile_details(html: str, url: str) -> dict:
     details.update({
         "profile_url": _profile_base(url),
         "alternate_names": alternate_names,
+        "retrieved_at": datetime.now(timezone.utc).isoformat(),
+        "content_hash": hashlib.sha256(html.encode("utf-8", errors="replace")).hexdigest(),
+        "artifact_freshness": "current",
     })
     return details
 
@@ -369,6 +374,10 @@ def _complaint_summary(html: str, url: str) -> dict:
         "total_complaints_3y": total,
         "closed_complaints_12m": closed_12,
         "summary_parsed": total is not None,
+        "canonical_profile_id": _profile_base(url).rsplit("/", 1)[-1],
+        "retrieved_at": datetime.now(timezone.utc).isoformat(),
+        "content_hash": hashlib.sha256(html.encode("utf-8", errors="replace")).hexdigest(),
+        "artifact_freshness": "current",
         # Do not retain consumer complaint narratives. We only need metadata for
         # evidentiary context behind the bidder's Y/N complaint flag.
         "recent_complaint_metadata": _complaint_metadata(soup),
@@ -581,17 +590,31 @@ class BbbComplaintsAdapter:
             profile = _profile_base(url)
             details = _profile_details(html, url)
             contexts = self.profile_contexts.get(profile, [])
+            if contexts and not all(_string(details.get(field)) for field in ("name", "address", "city", "state", "zip")):
+                raise ValueError("BBB access challenge or parser drift: expected profile identity structure is missing")
             accepted = False
             for key in contexts:
                 search = self.search_evidence.get(profile, {}).get(key, {})
-                exact_name = self._name_exact(details.get("name") or search.get("name") or "", key)
+                # Sitemap slugs are discovery hints, never identity evidence. The
+                # fetched profile itself must expose its canonical name and full
+                # location before its complaint document may be requested.
+                exact_name = self._name_exact(details.get("name") or "", key)
                 combined = {
                     **search,
                     **{field: value for field, value in details.items() if value},
                 }
-                if exact_name and self._location_accepts(combined, key):
-                    self.matched_profiles[key][profile] = combined
-                    accepted = True
+                identity_complete = all(_string(details.get(field)) for field in ("name", "address", "city", "state", "zip"))
+                if exact_name and identity_complete and self._location_accepts(details, key):
+                    if self.matched_profiles[key] and profile not in self.matched_profiles[key]:
+                        existing = dict(self.matched_profiles[key])
+                        self.matched_profiles[key].clear()
+                        for candidate_url, candidate in {**existing, profile: combined}.items():
+                            self.ambiguous_profiles[key][candidate_url] = {
+                                **candidate, "reason": "Multiple exact BBB profiles require manual identity review"
+                            }
+                    else:
+                        self.matched_profiles[key][profile] = combined
+                        accepted = True
                 elif self._name_plausible(details.get("name") or search.get("name") or "", key):
                     self.ambiguous_profiles[key][profile] = {
                         **combined,
@@ -620,7 +643,7 @@ class BbbComplaintsAdapter:
             parsed = [summary for summary in summaries if summary.get("summary_parsed")]
             positive = any((summary.get("total_complaints_3y") or 0) > 0 for summary in parsed)
 
-            if positive:
+            if positive and contractor_complete and len(parsed) == len(profiles):
                 complaint_value = "Y"
             elif profiles and contractor_complete and not ambiguous and len(parsed) == len(profiles):
                 complaint_value = "N"
@@ -661,6 +684,10 @@ class BbbComplaintsAdapter:
                     "total_complaints_3y": summary.get("total_complaints_3y"),
                     "closed_complaints_12m": summary.get("closed_complaints_12m"),
                     "summary_parsed": bool(summary.get("summary_parsed")),
+                    "canonical_profile_id": summary.get("canonical_profile_id") or profile_url.rsplit("/", 1)[-1],
+                    "retrieved_at": summary.get("retrieved_at") or profile.get("retrieved_at"),
+                    "content_hash": summary.get("content_hash") or profile.get("content_hash"),
+                    "artifact_freshness": summary.get("artifact_freshness") or profile.get("artifact_freshness") or "unknown",
                     "recent_complaint_metadata": summary.get("recent_complaint_metadata") or [],
                 })
 

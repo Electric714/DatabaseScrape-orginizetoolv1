@@ -7,7 +7,6 @@ from app.adapters import adapter_for_url
 from app.bbb_sitemap_adapter import (
     BBB_SITEMAP_INDEX,
     BbbSitemapComplaintsAdapter,
-    _expanded_sitemap_numbers,
 )
 from app.bidder_schema import BIDDER_COLUMNS, bidder_row
 from app.crawler import CrawlEngine
@@ -79,23 +78,26 @@ def test_seed_uses_published_sitemap_and_never_bbb_search():
     assert adapter.browser_respect_robots is True
 
 
-def test_wisconsin_index_selection_is_narrow_and_includes_boundary_padding():
-    adapter = BbbSitemapComplaintsAdapter()
+def test_index_refresh_is_dynamic_bounded_and_checkpointed(tmp_path):
+    adapter = BbbSitemapComplaintsAdapter(cache_path=tmp_path / "bbb-index.json", refresh_batch_size=2)
     adapter.seed_urls([bidder()])
-    expected = _expanded_sitemap_numbers("WI")
-    index_html = xml_index(range(1, 576))
+    index_html = xml_index(range(1, 5))
     links = adapter.links(index_html, BBB_SITEMAP_INDEX)
     selected = {
         int(url.rsplit("-", 1)[1].split(".", 1)[0])
         for url in links
     }
-    assert selected == expected
-    assert min(selected) == 324
-    assert max(selected) == 332
-    assert len(selected) == 9
+    assert selected == {1, 2}
+    assert adapter.index_refresh_incomplete is True
     assert all("/search" not in url for url in links)
-    assert adapter.allowed_url("https://www.bbb.org/sitemap-business-profiles-327.xml")
-    assert not adapter.allowed_url("https://www.bbb.org/sitemap-business-profiles-333.xml")
+    adapter.links(xml_urls([]), links[0])
+    adapter.links(xml_urls([PROFILE]), links[1])
+
+    restarted = BbbSitemapComplaintsAdapter(cache_path=tmp_path / "bbb-index.json", refresh_batch_size=2)
+    restarted.seed_urls([bidder()])
+    resumed = restarted.links(index_html, BBB_SITEMAP_INDEX)
+    assert {int(url.rsplit("-", 1)[1].split(".", 1)[0]) for url in resumed} == {2, 3, 4}
+    assert PROFILE not in resumed
 
 
 def test_sitemap_slug_only_discovers_plausible_same_state_profile():
@@ -111,7 +113,8 @@ def test_sitemap_slug_only_discovers_plausible_same_state_profile():
     assert links == [PROFILE]
 
 
-async def test_full_sitemap_to_profile_to_complaints_flow_never_uses_search(database):
+async def test_full_sitemap_to_profile_to_complaints_flow_never_uses_search(database, tmp_path, monkeypatch):
+    monkeypatch.setenv("BBB_SITEMAP_CACHE_PATH", str(tmp_path / "bbb-index.json"))
     await bidder_db.import_rows("synthetic.csv", [bidder()], [])
     source = await db.create_source(SourceCreate(
         name="BBB Business Profiles / Complaints",
@@ -125,8 +128,6 @@ async def test_full_sitemap_to_profile_to_complaints_flow_never_uses_search(data
     ).model_dump(mode="json"))
 
     requested = []
-    wi_numbers = _expanded_sitemap_numbers("WI")
-
     def site(request):
         requested.append(str(request.url))
         path = request.url.path
@@ -138,11 +139,11 @@ async def test_full_sitemap_to_profile_to_complaints_flow_never_uses_search(data
                 "Sitemap: https://www.bbb.org/sitemap-business-profiles-index.xml\n"
             ), headers={"content-type": "text/plain"})
         if path == "/sitemap-business-profiles-index.xml":
-            return httpx.Response(200, text=xml_index(range(1, 576)), headers={"content-type": "text/xml"})
+            return httpx.Response(200, text=xml_index(range(1, 4)), headers={"content-type": "text/xml"})
         if path.startswith("/sitemap-business-profiles-"):
             number = int(path.rsplit("-", 1)[1].split(".", 1)[0])
-            urls = [PROFILE] if number == 327 else []
-            assert number in wi_numbers
+            urls = [PROFILE] if number == 2 else []
+            assert number in {1, 2, 3}
             return httpx.Response(200, text=xml_urls(urls), headers={"content-type": "text/xml"})
         if path == "/us/wi/madison/profile/general-contractor/example-builders-llc-0694-1000000000":
             return httpx.Response(200, text=PROFILE_HTML, headers={"content-type": "text/html"})
