@@ -7,27 +7,11 @@ import re
 import sys
 import traceback
 import zipfile
-from urllib.parse import urlsplit, urlunsplit
-
 from . import database as db
+from .diagnostics import redact, sanitize
 
 APP_VERSION = "0.6.0"
-URL = re.compile(r"https?://[^\s<>\"']+")
-SECRET = re.compile(r"(?i)(authorization|cookie|password|token|api[_-]?key|secret)(\s*[:=]\s*)([^\s,;]+)")
 
-
-def redact(value):
-    def safe_url(match):
-        try:
-            url = urlsplit(match[0])
-            return urlunsplit((url.scheme, url.hostname or "", url.path, "", ""))
-        except ValueError:
-            return "[invalid URL]"
-    text = URL.sub(safe_url, str(value))
-    text = re.sub(r"(?i)(authorization\s*[:=]\s*)(?:Bearer|Basic)\s+\S+", r"\1[redacted]", text)
-    text = SECRET.sub(r"\1\2[redacted]", text)
-    text = re.sub(r"(?i)[A-Z]:\\Users\\[^\\\s]+", r"C:\\Users\\[user]", text)
-    return text[:12000]
 
 
 class ActivityHandler(logging.Handler):
@@ -36,7 +20,7 @@ class ActivityHandler(logging.Handler):
         if record.exc_info:
             message += "\n" + "".join(traceback.format_exception(*record.exc_info))
         details = getattr(record, "details", {})
-        clean = {str(k): "[redacted]" if re.search(r"(?i)token|secret|password|cookie|authorization|api[_-]?key", str(k)) else redact(v) for k, v in details.items()}
+        clean = sanitize(details)
         future = db._EXECUTOR.submit(db._sync_add_event, record.levelname, record.name,
             redact(message), clean, getattr(record, "job_id", None), getattr(record, "source_id", None))
         def completed(result):

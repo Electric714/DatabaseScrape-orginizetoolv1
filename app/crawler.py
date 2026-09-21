@@ -21,6 +21,10 @@ from .adapters import adapter_for_url
 from .config import ASSET_EXTENSIONS, DEFAULT_TIMEOUT_SECONDS, DEFAULT_USER_AGENT, MAX_BODY_BYTES
 from .security import PublicTransport
 from .normalizer import entity_key, record_hash
+from .diagnostics import (
+    AcquisitionFailure, AcquisitionStage, AcquisitionStatus, RetryClass,
+    classify_failure,
+)
 
 _HOST_GATES = weakref.WeakKeyDictionary()
 
@@ -241,6 +245,7 @@ class CrawlEngine:
         self.record_digests = {}
         self.processed = 0
         self.limited = False
+        self.acquisition_stage = AcquisitionStage.PREPARE
         self.transport = transport  # Test dependency injection; never exposed by API.
         self.renderer = BrowserRenderer(self)
         self.adapter = adapter_for_url(self.start_url)
@@ -262,6 +267,8 @@ class CrawlEngine:
         await db.update_job(
             self.job_id,
             heartbeat_at=db.utcnow(),
+            acquisition_stage=AcquisitionStage.PREPARE.value,
+            acquisition_status=AcquisitionStatus.RUNNING.value,
             acquisition_limits_json=json.dumps({
                 "max_pages": self.max_pages, "max_depth": self.max_depth, "concurrency": self.concurrency,
                 "delay_ms": int(self.delay * 1000), "force_full": bool(self.force_full),
@@ -288,8 +295,10 @@ class CrawlEngine:
                         source_id=self.source_id, job_id=self.job_id, url=self.start_url,
                     )
                 else:
+                    await self._set_stage(AcquisitionStage.POLICY)
                     await self._load_robots(client)
                 if getattr(self.adapter, "query_mode", False):
+                    await self._set_stage(AcquisitionStage.DISCOVERY)
                     master_rows = await bidder_master_db.all_rows()
                     if self.master_ids is not None:
                         master_rows = [r for r in master_rows if r["_master_id"] in self.master_ids]
@@ -304,6 +313,7 @@ class CrawlEngine:
                         contractors=len(master_rows), query_pages=len(frontier),
                     )
                 else:
+                    await self._set_stage(AcquisitionStage.DISCOVERY)
                     activity.emit("INFO", "Crawl policy checked; discovering sitemap links", source_id=self.source_id, job_id=self.job_id)
                     frontier = [self.start_url, *await self._discover_sitemap_urls(client)]
                 await db.seed_frontier(self.job_id, self.source_id, [canonicalize_url(url) for url in frontier if canonicalize_url(url)], 0)
@@ -339,6 +349,7 @@ class CrawlEngine:
                 complete = not self.limited and not job["errors"]
                 if hasattr(self.adapter, "finalize_records"):
                     try:
+                        await self._set_stage(AcquisitionStage.FINALIZE)
                         final_records = self.adapter.finalize_records(complete=complete)
                         await self._store_final_records(final_records)
                     except Exception as exc:
@@ -363,6 +374,8 @@ class CrawlEngine:
                     self.job_id, final_status,
                     message=f"{self.processed} pages processed. " + ("Crawl boundary exhausted." if complete else "Limits or errors prevented a complete scan; missing records were not marked inactive."),
                     completeness_json=json.dumps(completeness, sort_keys=True),
+                    acquisition_stage=AcquisitionStage.FINALIZE.value,
+                    acquisition_status=(AcquisitionStatus.COMPLETE if complete else AcquisitionStatus.INCOMPLETE).value,
                 )
                 await db.record_job_diagnostic(
                     self.job_id, "INFO" if complete else "WARNING", "completion",
@@ -377,6 +390,7 @@ class CrawlEngine:
                 await db.transition_job(
                     self.job_id, "interrupted", message=reason, restart_reason=reason,
                     completeness_json=json.dumps({"complete": False, "reason": "application_shutdown"}),
+                    acquisition_status=AcquisitionStatus.INCOMPLETE.value,
                 )
                 await db.record_job_diagnostic(
                     self.job_id, "WARNING", "interruption", reason, source_id=self.source_id,
@@ -391,12 +405,19 @@ class CrawlEngine:
                 )
             raise
         except Exception as exc:
-            safe_error = activity.redact(str(exc))
+            failure = classify_failure(exc, self.acquisition_stage)
+            safe_error = activity.redact(str(failure))
             activity.emit("ERROR", "Scan failed", source_id=self.source_id, job_id=self.job_id, error=safe_error)
             await db.increment_job(self.job_id, errors=1)
             await db.transition_job(self.job_id, "failed", message=safe_error[:1000],
-                                    completeness_json=json.dumps({"complete": False, "reason": "failed"}))
-            await db.record_job_diagnostic(self.job_id, "ERROR", "failure", safe_error, source_id=self.source_id)
+                                    completeness_json=json.dumps({"complete": False, "reason": failure.code}),
+                                    acquisition_stage=failure.stage.value,
+                                    acquisition_status=failure.status.value,
+                                    failure_code=failure.code, retry_class=failure.retry.value)
+            await db.record_job_diagnostic(
+                self.job_id, "ERROR", failure.code, safe_error, source_id=self.source_id,
+                retryable=failure.retryable, details=failure.details(),
+            )
             raise
         finally:
             await self.renderer.close()
@@ -412,28 +433,19 @@ class CrawlEngine:
             activity.emit("INFO", "Page processed", source_id=self.source_id, job_id=self.job_id, url=url, links=len(links))
             return links
         except Exception as exc:
-            safe_error = activity.redact(str(exc))
-            category = "page_error"
-            lowered = safe_error.lower()
-            if "http 401" in lowered or "http 403" in lowered or "access challenge" in lowered or "access denied" in lowered:
-                category = "access_block"
-            elif "http 429" in lowered:
-                category = "rate_limit"
-            elif "response exceeds" in lowered or "decoder" in lowered or "unrecognized" in lowered:
-                category = "malformed_response"
+            failure = classify_failure(exc, AcquisitionStage.DOWNLOAD)
+            safe_error = activity.redact(str(failure))
+            category = failure.code
             await db.frontier_state(self.job_id, url, "failed", last_error=safe_error[:1000])
             await db.record_job_diagnostic(
                 self.job_id, "ERROR", category, safe_error, source_id=self.source_id, url=url,
-                retryable=False, details={"depth": depth},
+                retryable=failure.retryable, details={"depth": depth, **failure.details()},
             )
             activity.emit("ERROR", "Page could not be processed", source_id=self.source_id, job_id=self.job_id, url=url, error=safe_error)
             await db.increment_job(self.job_id, errors=1)
             await db.upsert_page(self.source_id, url, last_error=safe_error[:1000])
-            if getattr(self.adapter, "fail_fast_access_errors", False) and (
-                "HTTP 401" in safe_error or "HTTP 403" in safe_error or "HTTP 429" in safe_error
-                or "access challenge" in safe_error.lower()
-            ):
-                raise
+            if getattr(self.adapter, "fail_fast_access_errors", False) and failure.status == AcquisitionStatus.BLOCKED:
+                raise failure
             return []
         finally:
             self.processed += 1
@@ -441,6 +453,7 @@ class CrawlEngine:
             await db.update_job(self.job_id, heartbeat_at=db.utcnow())
 
     async def _process_url(self, client, url):
+        await self._set_stage(AcquisitionStage.DOWNLOAD)
         cached = await db.get_page(self.source_id, url)
         result = await self._fetch(client, url, cached)
         if result.status == 304:
@@ -465,12 +478,14 @@ class CrawlEngine:
             await self._touch_cached(url)
             links = json.loads(cached.get("discovered_links") or "[]")
         else:
+            await self._set_stage(AcquisitionStage.PARSE)
             # Invalidate before persisting records. A crash cannot reuse an old
             # page cache with newly replaced record associations.
             await db.upsert_page(self.source_id, url, content_hash=None, etag=None, last_modified=None)
             links = list(dict.fromkeys(canonicalize_url(u) for u in self.adapter.links(result.text, result.url)))
             links = [u for u in links if self._allowed_url(u)]
             records = self.adapter.extract(result.text, result.url)
+            await self._set_stage(AcquisitionStage.PERSIST)
             await db.increment_job(self.job_id, records_found=len(records))
             for record in records:
                 self._register_record(entity_key(record), record_hash(record))
@@ -483,6 +498,13 @@ class CrawlEngine:
             last_modified=None if result.rendered else result.headers.get("last-modified"),
             content_hash=digest, discovered_links=json.dumps(links), last_error=None, rendered=int(result.rendered), fetch_mode=self.render_mode)
         return links
+
+    async def _set_stage(self, stage: AcquisitionStage) -> None:
+        self.acquisition_stage = stage
+        await db.update_job(
+            self.job_id, acquisition_stage=stage.value,
+            acquisition_status=AcquisitionStatus.RUNNING.value, heartbeat_at=db.utcnow(),
+        )
 
     async def _store_final_records(self, records):
         if not records:
