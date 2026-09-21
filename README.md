@@ -1,8 +1,8 @@
 # Paralegal Database Tool
 
-## Current proof-of-concept status (2026-09-14)
+## Current proof-of-concept status (updated 2026-09-21)
 
-**Read [the current POC review](docs/POC-REVIEW.md) first.** It supersedes the older implementation notes below. The master CSV is the only contractor list. Select contractors before research; source-owned findings are compared separately. PACER is excluded, OSHA/DOL share one collector, Minnesota OSP is implemented, Illinois IDOL and Wisconsin WisDOT collectors are implemented, and Violation Tracker has a provisional HTML adapter. SAM Alpha is test evidence only. BBB/Violation Tracker live access is blocked; API lookups need credentials. Overall retrieval feasibility is not yet proven.
+**Read [the current POC review](docs/POC-REVIEW.md) first.** It supersedes the older implementation notes below. The master CSV is the only contractor list. Select contractors before research; source-owned findings are compared separately. PACER is excluded, OSHA/DOL share one collector, and Minnesota OSP, Illinois IDOL, and Wisconsin WisDOT collectors are implemented. SAM Alpha is test evidence only. BBB live access is blocked, API lookups need credentials, and Violation Tracker is disabled pending the formal discovery gate in [its request-flow record](docs/VIOLATION-TRACKER.md). Overall retrieval feasibility is not yet proven.
 
 The review records aggregate validation outcomes and limits without publishing contractor-specific evidence. Research does not add contractors or infer clean results from blocked/partial searches.
 
@@ -183,6 +183,4 @@ Install Python 3.11 or newer, then run **bash scripts/start-unix.sh** from the e
 - [Interface, logging, and setup details](docs/INTERFACE-AND-SETUP.md)
 
 This remains a single-process local proof of concept. The database/review workflow is substantially implemented; the six source integrations still require real-site adapters before collection can be considered production-ready. A completed generic scan means the configured traversal finished, not that every relevant legal/public record has been found. Use only permitted public sources.
-
-
 
