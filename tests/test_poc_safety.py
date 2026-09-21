@@ -10,6 +10,7 @@ from app.state_adapter import MinnesotaDebarmentAdapter, parse_minnesota, active
 from app.crawler import CrawlEngine
 from app.models import SourceCreate
 from app.bidder_schema import BIDDER_COLUMNS, parse_bidder_csv
+from app.sam_extract import SamExtractError, iter_public_v2_rows
 
 
 def contractor(**changes):
@@ -109,10 +110,15 @@ async def test_catalog_excludes_pacer_and_selection_validates(database):
     assert error.value.status_code == 422
 
 
-def test_api_error_payloads_are_not_successful_empty_results():
-    from app.sam_adapter import _payload
+def test_source_error_payloads_are_not_successful_empty_results(tmp_path):
     from app.osha_adapter import _rows
-    with pytest.raises(ValueError):
-        _payload('{"error":"unavailable"}')
+
+    # SAM no longer consumes a JSON API payload. A bogus/error response saved as a
+    # Public V2 CSV must fail schema validation rather than becoming an empty scan.
+    bad_sam = tmp_path / "sam-error.csv"
+    bad_sam.write_text('{"error":"unavailable"}', encoding="utf-8")
+    with pytest.raises(SamExtractError):
+        list(iter_public_v2_rows(bad_sam, max_uncompressed=100000, artifact={"extension": ".csv"}))
+
     with pytest.raises(ValueError):
         _rows('{"data":[null]}')
