@@ -279,7 +279,10 @@ class CrawlEngine:
                 transport=self.transport or PublicTransport(), trust_env=False, follow_redirects=False,
                 timeout=DEFAULT_TIMEOUT_SECONDS, headers={"User-Agent": DEFAULT_USER_AGENT},
             ) as client:
-                if getattr(self.adapter, "api_source", False):
+                if getattr(self.adapter, "artifact_source", False):
+                    activity.emit("INFO", "Using official binary artifact source; robots.txt is not applicable",
+                                  source_id=self.source_id, job_id=self.job_id, url=self.start_url)
+                elif getattr(self.adapter, "api_source", False):
                     activity.emit(
                         "INFO", "Using authenticated public API source; robots.txt is not applicable",
                         source_id=self.source_id, job_id=self.job_id, url=self.start_url,
@@ -291,7 +294,23 @@ class CrawlEngine:
                     )
                 else:
                     await self._load_robots(client)
-                if getattr(self.adapter, "query_mode", False):
+                if getattr(self.adapter, "artifact_source", False):
+                    master_rows = await bidder_master_db.all_rows()
+                    if self.master_ids is not None:
+                        master_rows = [r for r in master_rows if r["_master_id"] in self.master_ids]
+                    if not master_rows:
+                        raise ValueError("Import the master bidder CSV before running the extract scan")
+                    self.adapter.seed_urls(master_rows)
+                    try:
+                        await self.adapter.acquire(client)
+                        self.processed = 1
+                    except Exception as exc:
+                        self.adapter.incomplete_reason = self.adapter.incomplete_reason or str(exc)
+                        await db.increment_job(self.job_id, errors=1)
+                        activity.emit("ERROR", "Binary artifact could not be validated", source_id=self.source_id,
+                                      job_id=self.job_id, error=str(exc))
+                    frontier = []
+                elif getattr(self.adapter, "query_mode", False):
                     master_rows = await bidder_master_db.all_rows()
                     if self.master_ids is not None:
                         master_rows = [r for r in master_rows if r["_master_id"] in self.master_ids]

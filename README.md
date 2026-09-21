@@ -87,7 +87,7 @@ SAM.gov Federal Debarment is a built-in integration using the official **v4 prod
 
 The adapter submits targeted `classification=Firm`, `recordStatus=Active`, and `exclusionName` queries for each approved contractor and related company. It performs conservative normalized company-name matching and uses the bidder address/state/city/ZIP only for disambiguation when necessary.
 
-SAM requires an API key as the `api_key` query parameter. The built-in SAM card has a **Set SAM API key** control; the app validates the key against the official production endpoint before saving it to `.runtime/sam_api_key.txt`. `SAM_API_KEY` may also be supplied as an environment variable.
+SAM federal exclusions use the credential-free daily **Exclusions / Public V2** artifact. The collector validates the official file listing and archive before atomic cache replacement, records the artifact hash and publication/retrieval timestamps, and reports retained-cache age when a refresh fails. Only confirmed active matches may propose `Y`; a clean federal scan never writes `N` to the combined state/federal field.
 
 Because SAM requires the credential in the query string, the crawler uses a credential-injection hook: stored source URLs, page-cache URLs, record evidence, activity events, diagnostics, and bidder exports contain the credential-free logical URL. The API key is added only to the outbound network request.
 

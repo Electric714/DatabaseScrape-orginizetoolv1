@@ -39,8 +39,8 @@ ADAPTERS: dict[str, type[GenericAdapter]] = {
     "api.dol.gov": OshaEstablishmentAdapter,
     "api-alpha.sam.gov": SamExclusionsAdapter,
     "api.sam.gov": SamExclusionsAdapter,
-    # Explicit fail-closed registration: this must not fall through to the
-    # generic extractor while its public request contract remains unverified.
+    "sam.gov": SamExclusionsAdapter,
+    "www.sam.gov": SamExclusionsAdapter,
     "violationtracker.goodjobsfirst.org": ViolationTrackerAdapter,
     "mn.gov": MinnesotaDebarmentAdapter,
     "labor.illinois.gov": IllinoisDebarmentAdapter,

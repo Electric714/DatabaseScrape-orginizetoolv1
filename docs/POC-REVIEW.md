@@ -65,7 +65,7 @@ A company's headquarters state does not determine every jurisdiction in which it
 
 Use the existing Windows launcher. Import the CSV. In Your research sites, select a few contractors and click the desired source's Collect button. Source coverage and ownership are visible in the expandable catalog; PACER explicitly shows Excluded from POC. Results remain source evidence. Compare collected data creates eligible proposals; Update is a separate manual action.
 
-Credentials: use **Set OSHA API key** and **Set SAM test API key** in the source section. These are the single recommended entry points, not adapter source files. Existing environment overrides (`DOL_API_KEY`, `SAM_API_KEY`) are retained for compatibility and take precedence; remove an override if changing a key in the UI. Keys are stored locally in ignored `.runtime` files. **Test DOL API / Test SAM API** retests the saved key and verifies response structure. Never commit credentials.
+Credentials: only OSHA/DOL needs an API key. SAM exclusions use the no-auth daily Public V2 artifact. Its evidence discloses file identity, SHA-256, publication time, retrieval time, and cache reuse/age; failed refreshes are incomplete and never silently use stale data.
 
 Tests: `.venv/bin/pytest -q --ignore=tests/test_browser.py` (or `python -m pytest -q --ignore=tests/test_browser.py` in your environment). JavaScript syntax checked with `node --check app/static/app.js`. Browser rendering QA was unavailable because the Chromium download timed out in this environment. No browser-visual verification is claimed.
 
