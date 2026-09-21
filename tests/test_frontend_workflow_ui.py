@@ -19,7 +19,6 @@ def test_research_desk_review_evidence_failure_and_focus_states(database, monkey
     from app import main
 
     monkeypatch.setattr(main, "dol_api_key_configured", lambda: False)
-    monkeypatch.setattr(main, "sam_api_key_configured", lambda: False)
 
     listener = socket.socket()
     listener.bind(("127.0.0.1", 0))

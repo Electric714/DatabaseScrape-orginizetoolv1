@@ -22,6 +22,10 @@ from .config import ASSET_EXTENSIONS, DEFAULT_TIMEOUT_SECONDS, DEFAULT_USER_AGEN
 from .security import PublicTransport
 from .normalizer import entity_key, record_hash
 from .errors import SourceAcquisitionError
+from .diagnostics import (
+    AcquisitionFailure, AcquisitionStage, AcquisitionStatus, RetryClass,
+    classify_failure,
+)
 
 _HOST_GATES = weakref.WeakKeyDictionary()
 

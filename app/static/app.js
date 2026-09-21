@@ -189,7 +189,7 @@ function renderConfiguredSources() {
     const running = isCollecting(source);
     const name = sourceDisplayName(source);
     const url = sourceDisplayUrl(source);
-    const builtInKeyButton = isOshaSource(source) ? '<button class="settings-button" type="button" data-dol-key>Set API key</button>' : isSamSource(source) ? '<button class="settings-button" type="button" data-sam-key>Set API key</button>' : '';
+    const builtInKeyButton = isOshaSource(source) ? '<button class="settings-button" type="button" data-dol-key>Set API key</button>' : '';
     const collectLabel = isOshaSource(source) ? 'Collect OSHA' : isSamSource(source) ? 'Collect federal debarment' : isBbbSource(source) ? 'Collect BBB complaints' : 'Collect records';
     const edit = (!isOshaSource(source) && !isSamSource(source) && !isBbbSource(source)) ? `<button class="settings-button" type="button" data-edit="${source.id}">Edit settings</button>` : '';
     const remove = (!isOshaSource(source) && !isSamSource(source) && !isBbbSource(source)) ? `<button class="icon-button" type="button" data-delete="${source.id}" aria-label="Delete ${esc(name)}" title="Remove research site">×</button>` : '';
@@ -819,7 +819,6 @@ function installEvents() {
     if (!button) return;
     if (button.dataset.close) { closeDialog(button.dataset.close); return; }
     if (button.hasAttribute('data-dol-key')) { openDolKeyDialog(button); return; }
-    if (button.hasAttribute('data-sam-key')) { openSamKeyDialog(button); return; }
     if (button.dataset.record) { viewRecord(Number(button.dataset.record), button); return; }
     if (button.dataset.edit) { openSource(state.sources.find(source => source.id === Number(button.dataset.edit)), button); return; }
     if (button.dataset.scan) { scanSource(Number(button.dataset.scan), false); return; }

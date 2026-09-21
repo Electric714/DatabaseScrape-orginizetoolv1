@@ -39,17 +39,14 @@ local .runtime folder; it is not added to GitHub, bidder exports, or activity lo
 OSHA can propose changes only to the OSHA, OSHA Severe Violations, and Years
 columns. The other bidder columns are left for their appropriate research sites.
 
-SAM.GOV FEDERAL DEBARMENT API KEY
-Federal debarment uses the official SAM.gov Exclusions API v4 production endpoint:
-https://api.sam.gov/entity-information/v4/exclusions
+SAM.GOV FEDERAL DEBARMENT / EXCLUSIONS
+SAM uses the credential-free daily Exclusions / Public V2 data extract.
+No SAM API key is required. Click Collect federal debarment after the
+master CSV is loaded. The app validates and caches the current official
+CSV/ZIP artifact, then compares only the approved master contractors.
 
-Click Set SAM API key, paste your SAM.gov Public API Key, then choose
-Test & save API key. The app validates it before storing it only in .runtime.
-The key is added only to the outbound SAM request and is not stored in source
-URLs, activity logs, GitHub, diagnostics, or bidder exports.
-
-An exact active federal exclusion can propose state_federal_debarment = Y.
-A clean SAM result does not write N because state debarment is checked separately.
+A confirmed active federal exclusion can propose state_federal_debarment = Y.
+No match never writes N, and uncertain identity remains manual-review evidence.
 
 BBB COMPLAINTS
 BBB is built in and needs no API key. Click Collect BBB complaints after the

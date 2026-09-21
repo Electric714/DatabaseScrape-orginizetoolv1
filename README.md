@@ -77,19 +77,10 @@ Inspection IDs, establishment/location fields, dates, citation IDs, violation ty
 
 Because this is a documented REST API integration, the application does not navigate OSHA pages, launch a special browser session, or apply website `robots.txt` logic for these API requests.
 
-## SAM.gov Federal Debarment / Exclusions API — Source 2
+## SAM.gov Federal Debarment / Exclusions Public V2 — Source 2
 
-SAM.gov Federal Debarment is a built-in integration using the official **v4 production Exclusions API** documented by GSA:
+SAM.gov Federal Debarment is a built-in integration using the official credential-free daily **Exclusions / Public V2** artifact. The application obtains the current SAM Data Services artifact once, validates it, caches it, and compares the approved master contractors locally. The collector validates the official file listing and archive before atomic cache replacement, records the artifact hash and publication/retrieval timestamps, and reports retained-cache age when a refresh fails. Only confirmed active matches may propose `Y`; a clean federal scan never writes `N` to the combined state/federal field.
 
-- Production endpoint: `https://api.sam.gov/entity-information/v4/exclusions`
-- Alpha endpoint remains documented by GSA for pre-production testing: `https://api-alpha.sam.gov/entity-information/v4/exclusions`
-- API documentation: `https://open.gsa.gov/api/exclusions-api/`
-
-The adapter submits targeted `classification=Firm`, `recordStatus=Active`, and `exclusionName` queries for each approved contractor and related company. It performs conservative normalized company-name matching and uses the bidder address/state/city/ZIP only for disambiguation when necessary.
-
-SAM federal exclusions use the credential-free daily **Exclusions / Public V2** artifact. The collector validates the official file listing and archive before atomic cache replacement, records the artifact hash and publication/retrieval timestamps, and reports retained-cache age when a refresh fails. Only confirmed active matches may propose `Y`; a clean federal scan never writes `N` to the combined state/federal field.
-
-Because SAM requires the credential in the query string, the crawler uses a credential-injection hook: stored source URLs, page-cache URLs, record evidence, activity events, diagnostics, and bidder exports contain the credential-free logical URL. The API key is added only to the outbound network request.
 
 SAM is authoritative only for the **federal positive component** of `state_federal_debarment`:
 
@@ -97,7 +88,6 @@ SAM is authoritative only for the **federal positive component** of `state_feder
 - a clean SAM search does **not** propose `N`, because the same combined field can still be positive due to a state debarment source;
 - similar names remain evidence for manual identity review and do not update the master automatically.
 
-The production endpoint is used for live public exclusion checks. Exact active federal matches may propose `Y`; absence never clears the combined state/federal field.
 
 ## BBB Business Profiles / Complaints — Source 3
 
