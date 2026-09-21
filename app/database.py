@@ -11,6 +11,7 @@ from typing import Any
 from .config import DB_PATH
 from .normalizer import canonical_record, entity_key, record_hash
 from .bidder_schema import BIDDER_COLUMNS, BIDDER_DB_COLUMNS, bidder_row, bidder_master_row, normalize_match_text, bidder_values_equal
+from .diagnostics import redact, sanitize
 
 
 def utcnow() -> str:
@@ -112,6 +113,20 @@ def _migrate_v4(conn: sqlite3.Connection) -> None:
     )
     for statement in statements:
         conn.execute(statement)
+
+
+def _migrate_v5(conn: sqlite3.Connection) -> None:
+    """Expose acquisition progress without changing the terminal job state model."""
+    columns = _table_columns(conn, "crawl_jobs")
+    additions = {
+        "acquisition_stage": "TEXT NOT NULL DEFAULT 'prepare'",
+        "acquisition_status": "TEXT NOT NULL DEFAULT 'pending'",
+        "failure_code": "TEXT",
+        "retry_class": "TEXT NOT NULL DEFAULT 'never'",
+    }
+    for name, declaration in additions.items():
+        if name not in columns:
+            conn.execute(f"ALTER TABLE crawl_jobs ADD COLUMN {name} {declaration}")
 
 
 def connect() -> sqlite3.Connection:
@@ -325,6 +340,8 @@ def _sync_init_db() -> None:
             conn.execute("PRAGMA user_version=3")
         if int(conn.execute("PRAGMA user_version").fetchone()[0]) < 4:
             _run_migration(conn, 4, _migrate_v4)
+        if int(conn.execute("PRAGMA user_version").fetchone()[0]) < 5:
+            _run_migration(conn, 5, _migrate_v5)
         quick_check = conn.execute("PRAGMA quick_check").fetchone()[0]
         if quick_check != "ok":
             raise RuntimeError(f"SQLite quick_check failed: {quick_check}")

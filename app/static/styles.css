@@ -430,3 +430,5 @@ table { border-collapse: collapse; }
   .section-heading, .research-selection { padding-left: 15px; padding-right: 15px; }
   .research-source-grid { padding-left: 12px; padding-right: 12px; }
 }
+.job-acquisition { margin: .35rem 0; color: var(--muted); font-size: .82rem; text-transform: capitalize; }
+.job-acquisition b { color: var(--ink); }

@@ -7,14 +7,10 @@ import re
 import sys
 import traceback
 import zipfile
-from urllib.parse import urlsplit, urlunsplit
-
 from . import database as db
+from .diagnostics import redact, sanitize
 
 APP_VERSION = "0.6.0"
-URL = re.compile(r"https?://[^\s<>\"']+")
-SECRET = re.compile(r"(?i)(authorization|cookie|password|token|api[_-]?key|secret)(\s*[:=]\s*)([^\s,;]+)")
-
 
 def redact(value):
     def safe_url(match):
