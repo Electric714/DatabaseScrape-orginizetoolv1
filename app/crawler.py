@@ -144,6 +144,10 @@ class BrowserRenderer:
                 self.playwright = await async_playwright().start()
                 visible = bool(getattr(self.engine.adapter, "visible_browser", False))
                 self.browser = await self.playwright.chromium.launch(headless=not visible)
+                try:
+                    self.engine.adapter.browser_engine_version = self.browser.version
+                except AttributeError:
+                    pass
                 if visible:
                     activity.emit("INFO", "Opened visible Chromium window for source collection", source_id=self.engine.source_id, job_id=self.engine.job_id)
             if self.direct_context is None:
@@ -198,11 +202,16 @@ class BrowserRenderer:
             if not response:
                 raise ValueError("Browser navigation returned no response")
             html = await self.direct_page.content()
+            final_url = canonicalize_url(self.direct_page.url)
+            requested_url = canonicalize_url(url)
+            allowed = getattr(self.engine.adapter, "browser_allowed_url", self.engine.adapter.allowed_url)
+            if not final_url or not allowed(final_url) or final_url.rstrip("/") != requested_url.rstrip("/"):
+                raise ValueError("Direct browser redirect left the expected BBB host/profile path boundary")
             if len(html.encode()) > MAX_BODY_BYTES:
                 raise ValueError("Rendered page exceeds body limit")
             headers = await response.all_headers()
             return FetchResult(
-                self.direct_page.url,
+                final_url,
                 response.status,
                 html,
                 headers,
@@ -442,6 +451,11 @@ class CrawlEngine:
             await db.mark_source_scanned(self.source_id)
 
     async def _process_safely(self, client, url, depth=0):
+        if getattr(self.adapter, "circuit_open", False) and (
+            getattr(self.adapter, "acquisition_stage_for", lambda _url: "")(url).startswith("browser_")
+        ):
+            await db.frontier_state(self.job_id, url, "failed", last_error="BBB acquisition circuit is open")
+            return []
         activity.emit("INFO", "Fetching page", source_id=self.source_id, job_id=self.job_id, url=url)
         await db.frontier_state(self.job_id, url, "processing", increment_attempt=True)
         try:
@@ -471,6 +485,13 @@ class CrawlEngine:
         await self._set_stage(AcquisitionStage.DOWNLOAD)
         cached = await db.get_page(self.source_id, url)
         result = await self._fetch(client, url, cached)
+        note = getattr(self.adapter, "note_acquisition", None)
+        if note:
+            challenged = bool(CHALLENGE.search(result.text))
+            blocked = result.status == 403 or challenged
+            note(url, status=result.status,
+                 challenge="challenge_html" if challenged else ("http_forbidden" if result.status == 403 else "none"),
+                 blocked=blocked)
         if result.status == 304:
             if not cached or not cached.get("content_hash"):
                 raise ValueError("304 without a usable cached page")
