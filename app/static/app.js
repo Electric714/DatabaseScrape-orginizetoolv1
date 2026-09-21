@@ -11,7 +11,7 @@ const OSHA_HOSTS = new Set(['www.osha.gov','apiprod.dol.gov','api.dol.gov']);
 const SAM_HOSTS = new Set(['sam.gov','www.sam.gov','api.sam.gov','api-alpha.sam.gov']);
 const BBB_HOSTS = new Set(['bbb.org','www.bbb.org']);
 const OSHA_API_URL = 'https://apiprod.dol.gov/v4/get/OSHA/inspection/json';
-const SAM_API_URL = 'https://api.sam.gov/entity-information/v4/exclusions';
+const SAM_API_URL = 'https://sam.gov/data-services/Exclusions/Public%20V2';
 const BBB_URL = 'https://www.bbb.org/search';
 const BIDDER_COLUMNS = ['id','contractor_name','related_companies','address_1','city','state','zip','additional_address','additional_address_city','additional_address_state','additional_address_zip','dfi','wc','wc_date','osha_severe_violations','years','osha','state_federal_debarment','mndol_ineligibility','public_works_projects_budget_time_quality_complaint','federal_court','circuit_court','ccap_show150','environmental_violations','prevailing_wage_violations','dwd','dwd_substance_abuse_plan','better_business_bureau_complaints','misc_violations','tax_liability'];
 const EVIDENCE_FIELDS = [['DFI','dfi'],['WC','wc'],['OSHA','osha'],['OSHA severe','osha_severe_violations'],['Years','years'],['Debarment','state_federal_debarment'],['MN DOL','mndol_ineligibility'],['Federal court','federal_court'],['Circuit court','circuit_court'],['CCAP','ccap_show150'],['Environmental','environmental_violations'],['Prevailing wage','prevailing_wage_violations'],['DWD','dwd'],['BBB complaints','better_business_bureau_complaints'],['Misc.','misc_violations'],['Tax liability','tax_liability']];
@@ -19,7 +19,7 @@ const EVIDENCE_FIELDS = [['DFI','dfi'],['WC','wc'],['OSHA','osha'],['OSHA severe
 const state = {
   sources: [], catalog: [], jobs: [], events: [], cursor: 0, paused: false, follow: true, level: 'all',
   offset: 0, total: 0, evidenceOffset: 0, evidenceTotal: 0, refreshing: false, online: null,
-  deleteId: null, editingId: null, bidderStatus: null, dolStatus: null, samStatus: null,
+  deleteId: null, editingId: null, bidderStatus: null, dolStatus: null,
   proposals: [], reviewMode: 'changes', lastDialogTrigger: null, recordSequence: 0, detailSequence: 0,
   batchUpdating: false, researchSourceInitialized: false
 };
@@ -119,9 +119,7 @@ function isOshaSource(source) { return OSHA_HOSTS.has(hostOf(source)); }
 function isSamSource(source) { return SAM_HOSTS.has(hostOf(source)); }
 function isBbbSource(source) { return BBB_HOSTS.has(hostOf(source)); }
 function sourceReady(source) {
-  return !isCollecting(source)
-    && (!isOshaSource(source) || Boolean(state.dolStatus?.configured))
-    && (!isSamSource(source) || Boolean(state.samStatus?.configured));
+  return !isCollecting(source) && (!isOshaSource(source) || Boolean(state.dolStatus?.configured));
 }
 
 function catalogForSource(source) {
@@ -145,7 +143,6 @@ function sourceDisplayUrl(source) {
 
 function sourceReadiness(source) {
   if (isOshaSource(source) && !state.dolStatus?.configured) return {label:'Needs API key', cls:'needs-key', ready:false};
-  if (isSamSource(source) && !state.samStatus?.configured) return {label:'Needs API key', cls:'needs-key', ready:false};
   if (isCollecting(source)) return {label:source.last_status, cls:String(source.last_status).toLowerCase(), ready:false};
   const status = String(source.last_status || '').toLowerCase();
   if (['partial','failed','error','blocked','interrupted','cancelled'].includes(status)) return {label:source.last_status, cls:status, ready:true};
@@ -166,7 +163,7 @@ function catalogJurisdiction(item) {
 
 function catalogCredential(item) {
   if (item.key === 'osha') return 'DOL Open Data API key';
-  if (item.key === 'sam') return 'SAM.gov Public API key';
+  if (item.key === 'sam') return 'None — public daily artifact';
   return 'None stored by this integration';
 }
 
@@ -238,15 +235,13 @@ function selectedResearchIds() {
 }
 
 async function loadSources() {
-  const [sources, dolStatus, samStatus, catalog, contractors] = await Promise.all([
-    api('/api/sources'), api('/api/integrations/dol'), api('/api/integrations/sam'), api('/api/source-catalog'), api('/api/bidder/master?limit=1000')
+  const [sources, dolStatus, catalog, contractors] = await Promise.all([
+    api('/api/sources'), api('/api/integrations/dol'), api('/api/source-catalog'), api('/api/bidder/master?limit=1000')
   ]);
   state.sources = sources;
   state.dolStatus = dolStatus;
-  state.samStatus = samStatus;
   state.catalog = catalog.sources || [];
   $('oshaApiKeyButton').textContent = dolStatus.configured ? 'Change OSHA API key' : 'Set OSHA API key';
-  $('samApiKeyButton').textContent = samStatus.configured ? 'Change SAM API key' : 'Set SAM API key';
   $('sourceCount').textContent = `${sources.length} collectors`;
   $('navSources').textContent = String(sources.length);
   const chooser = $('researchContractors');
@@ -648,34 +643,6 @@ async function saveDolApiKey(event) {
   finally { button.disabled = false; }
 }
 
-async function openSamKeyDialog(trigger = null) {
-  $('samKeyForm').reset();
-  $('samKeyMessage').textContent = '';
-  $('samApiKeyStatus').textContent = 'Checking current SAM.gov API key status…';
-  showDialog('samKeyDialog', trigger, '#samApiKey');
-  try {
-    const status = await api('/api/integrations/sam');
-    $('samApiKeyStatus').textContent = status.configured ? 'A SAM.gov API key is stored locally. Enter a new key only to replace it; the stored key itself is never displayed.' : 'No SAM.gov Public API Key is stored yet. Paste one below; it will be validated before saving.';
-  } catch (error) { $('samApiKeyStatus').textContent = 'Could not check current credential status.'; $('samKeyMessage').textContent = error.message; }
-}
-
-async function saveSamApiKey(event) {
-  event.preventDefault();
-  const button = $('saveSamKey');
-  const key = $('samApiKey').value.trim();
-  if (!key) return;
-  button.disabled = true;
-  $('samKeyMessage').textContent = 'Testing key with the SAM.gov production API…';
-  try {
-    const result = await api('/api/integrations/sam', {method:'POST', body:JSON.stringify({api_key:key})});
-    if (!result.validated) throw new Error('SAM.gov API key could not be validated.');
-    closeDialog('samKeyDialog');
-    notify(result.warning || 'SAM.gov API key tested and saved locally. Federal debarment research is ready.');
-    await refreshAll();
-  } catch (error) { $('samKeyMessage').textContent = error.message; localEvent('ERROR', `SAM.gov API key test failed: ${error.message}`); }
-  finally { button.disabled = false; }
-}
-
 function openSource(existing = null, trigger = null) {
   state.editingId = existing?.id || null;
   $('sourceForm').reset();
@@ -882,9 +849,7 @@ function installEvents() {
   $('addSourceButton').addEventListener('click', event => openSource(null, event.currentTarget));
   $('sourceForm').addEventListener('submit', saveSource);
   $('dolKeyForm').addEventListener('submit', saveDolApiKey);
-  $('samKeyForm').addEventListener('submit', saveSamApiKey);
   $('oshaApiKeyButton').addEventListener('click', event => openDolKeyDialog(event.currentTarget));
-  $('samApiKeyButton').addEventListener('click', event => openSamKeyDialog(event.currentTarget));
   $('confirmDelete').addEventListener('click', removeSource);
   $('refreshSources').addEventListener('click', () => refreshAll());
   $('updateSites').addEventListener('click', updateSites);

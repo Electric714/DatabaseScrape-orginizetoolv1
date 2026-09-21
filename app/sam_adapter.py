@@ -1,390 +1,279 @@
+"""SAM.gov daily Public V2 exclusions extract adapter (no credential required)."""
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import tempfile
 from collections import defaultdict
+from datetime import datetime, timezone
 from difflib import SequenceMatcher
-from urllib.parse import parse_qs, urlencode, urlsplit
+from email.utils import parsedate_to_datetime
+from pathlib import Path
+from urllib.parse import urljoin, urlsplit
 
 from .bidder_schema import normalize_match_text
-from .config import get_sam_api_key
+from .config import DATA_DIR
 from .identity import location_corroborates
-from .osha_adapter import company_core, contractor_aliases, clean_search_term
+from .osha_adapter import company_core, contractor_aliases
+from .sam_extract import SamExtractError, iter_public_v2_rows
 
-SAM_ALPHA_API_BASE = "https://api-alpha.sam.gov"
-SAM_PRODUCTION_API_BASE = "https://api.sam.gov"
-SAM_EXCLUSIONS_PATH = "/entity-information/v4/exclusions"
-SAM_ALPHA_EXCLUSIONS_ENDPOINT = f"{SAM_ALPHA_API_BASE}{SAM_EXCLUSIONS_PATH}"
-SAM_EXCLUSIONS_ENDPOINT = f"{SAM_PRODUCTION_API_BASE}{SAM_EXCLUSIONS_PATH}"
-SAM_PRODUCTION_EXCLUSIONS_ENDPOINT = SAM_EXCLUSIONS_ENDPOINT
+SAM_DATA_SERVICES_ENDPOINT = "https://sam.gov/data-services/Exclusions/Public%20V2"
+SAM_EXCLUSIONS_ENDPOINT = SAM_DATA_SERVICES_ENDPOINT  # compatibility/migration alias
+SAM_EXCLUSIONS_PATH = "/data-services/Exclusions/Public%20V2"
+SAM_PUBLIC_V2_PACKAGE = "Exclusions/Public V2/"
 SAM_PUBLIC_SEARCH = "https://sam.gov/search/?index=ex"
 SAM_MASTER_FIELDS = ("state_federal_debarment",)
-SAM_PAGE_SIZE = 10
+SAM_MAX_COMPRESSED_BYTES = int(os.getenv("SAM_MAX_COMPRESSED_BYTES", str(512 * 1024 * 1024)))
+SAM_MAX_UNCOMPRESSED_BYTES = int(os.getenv("SAM_MAX_UNCOMPRESSED_BYTES", str(2 * 1024 * 1024 * 1024)))
+SAM_CACHE_MAX_AGE_SECONDS = int(os.getenv("SAM_CACHE_MAX_AGE_SECONDS", str(48 * 3600)))
+SAM_CACHE_DIR = DATA_DIR / "sam-public-v2"
 
 
 def _string(value) -> str:
     return "" if value is None else str(value).strip()
 
 
-def _query_term(url: str) -> str:
-    return (parse_qs(urlsplit(url).query).get("exclusionName") or [""])[0].strip()
-
-
-def _query_page(url: str) -> int:
-    raw = (parse_qs(urlsplit(url).query).get("page") or ["0"])[0]
+def _parse_time(value: str) -> datetime:
+    value = _string(value)
+    if not value:
+        raise ValueError("artifact publication timestamp is missing")
     try:
-        return max(0, int(raw))
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
-        return 0
+        parsed = parsedate_to_datetime(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
-def _query_size(url: str) -> int:
-    raw = (parse_qs(urlsplit(url).query).get("size") or [str(SAM_PAGE_SIZE)])[0]
-    try:
-        return min(SAM_PAGE_SIZE, max(1, int(raw)))
-    except ValueError:
-        return SAM_PAGE_SIZE
-
-
-def _with_page(url: str, page: int) -> str:
-    parts = urlsplit(url)
-    query = parse_qs(parts.query, keep_blank_values=True)
-    query["page"] = [str(page)]
-    pairs = [(key, value) for key, values in query.items() for value in values]
-    return parts._replace(query=urlencode(pairs)).geturl()
-
-
-def build_exclusions_query(term: str, *, page: int = 0, size: int = SAM_PAGE_SIZE) -> str:
-    params = {
-        "classification": "Firm",
-        "exclusionName": term,
-        "recordStatus": "Active",
-        "page": str(max(0, page)),
-        "size": str(min(SAM_PAGE_SIZE, max(1, size))),
-    }
-    return f"{SAM_EXCLUSIONS_ENDPOINT}?{urlencode(params)}"
-
-
-def _payload(text: str) -> dict:
-    try:
-        value = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise ValueError("SAM.gov Exclusions API returned invalid JSON") from exc
-    if not isinstance(value, dict):
-        raise ValueError("SAM.gov Exclusions API returned an unexpected response")
-    entities = value.get("excludedEntity")
-    if entities is None and value.get("totalRecords") in (0, "0"):
-        entities = []
-    if not isinstance(entities, list):
-        raise ValueError("SAM.gov Exclusions API response did not contain an excludedEntity list")
-    if any(not isinstance(item, dict) for item in entities):
-        raise ValueError("SAM.gov returned malformed exclusion records")
-    value["excludedEntity"] = entities
-    return value
-
-
-def _identification(entity: dict) -> dict:
-    value = entity.get("exclusionIdentification")
-    return value if isinstance(value, dict) else {}
-
-
-def _details(entity: dict) -> dict:
-    value = entity.get("exclusionDetails")
-    return value if isinstance(value, dict) else {}
-
-
-def _address(entity: dict) -> dict:
-    for key in ("exclusionPrimaryAddress", "exclusionAddress"):
-        value = entity.get(key)
-        if isinstance(value, dict):
-            return value
-    return {}
-
-
-def _actions(entity: dict) -> list[dict]:
-    value = entity.get("exclusionActions")
-    if not isinstance(value, dict):
-        return []
-    actions = value.get("listOfActions")
-    return [item for item in actions if isinstance(item, dict)] if isinstance(actions, list) else []
-
-
-def _entity_name(entity: dict) -> str:
-    identification = _identification(entity)
-    return _string(identification.get("entityName") or identification.get("name"))
-
-
-def _entity_key(entity: dict) -> str:
-    identification = _identification(entity)
-    details = _details(entity)
-    actions = _actions(entity)
-    action = actions[-1] if actions else {}
-    stable = "|".join(
-        _string(value)
-        for value in (
-            identification.get("ueiSAM"),
-            identification.get("cageCode"),
-            _entity_name(entity),
-            details.get("excludingAgencyCode"),
-            details.get("exclusionType"),
-            action.get("activateDate"),
-            action.get("createDate"),
-        )
-    )
-    return normalize_match_text(stable) or normalize_match_text(_entity_name(entity))
-
-
-def _normalized_entity(entity: dict) -> dict:
-    identification = _identification(entity)
-    details = _details(entity)
-    address = _address(entity)
-    actions = _actions(entity)
-    return {
-        "entity_name": _entity_name(entity),
-        "uei_sam": _string(identification.get("ueiSAM")),
-        "cage_code": _string(identification.get("cageCode")),
-        "classification_type": _string(details.get("classificationType")),
-        "exclusion_type": _string(details.get("exclusionType")),
-        "exclusion_program": _string(details.get("exclusionProgram")),
-        "excluding_agency_code": _string(details.get("excludingAgencyCode")),
-        "excluding_agency_name": _string(details.get("excludingAgencyName")),
-        "address_line_1": _string(address.get("addressLine1")),
-        "address_line_2": _string(address.get("addressLine2")),
-        "city": _string(address.get("city")),
-        "state": _string(address.get("stateOrProvinceCode")),
-        "zip": _string(address.get("zipCode")),
-        "country": _string(address.get("countryCode")),
-        "actions": [
-            {
-                "create_date": _string(action.get("createDate")),
-                "update_date": _string(action.get("updateDate")),
-                "activate_date": _string(action.get("activateDate")),
-                "termination_date": _string(action.get("terminationDate")),
-                "termination_type": _string(action.get("terminationType")),
-                "record_status": _string(action.get("recordStatus")),
-            }
-            for action in actions
-        ],
-    }
+def select_manifest_artifact(payload: bytes | str | dict | list) -> dict:
+    """Validate a listing and deterministically select its newest Public V2 artifact."""
+    if isinstance(payload, (bytes, str)):
+        try:
+            payload = json.loads(payload)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("SAM file listing is not valid JSON") from exc
+    if isinstance(payload, dict):
+        items = next((payload[k] for k in ("files", "items", "data", "fileDetails") if isinstance(payload.get(k), list)), None)
+    else:
+        items = payload
+    if not isinstance(items, list) or not items or any(not isinstance(item, dict) for item in items):
+        raise ValueError("SAM file listing has an unexpected shape")
+    valid = []
+    for item in items:
+        package = _string(item.get("package") or item.get("folder") or item.get("path") or item.get("directory"))
+        name = _string(item.get("fileName") or item.get("name") or item.get("filename"))
+        identity = f"{package}/{name}".replace("//", "/")
+        lowered = identity.casefold()
+        if "histor" in lowered or "fascsa" in lowered or "public v2" not in lowered:
+            continue
+        extension = Path(name or urlsplit(_string(item.get("url") or item.get("downloadUrl"))).path).suffix.lower()
+        if extension not in {".zip", ".csv"}:
+            continue
+        content_type = _string(item.get("contentType") or item.get("content_type") or item.get("mimeType")).lower()
+        expected = ("zip", "octet-stream") if extension == ".zip" else ("csv", "text/plain", "octet-stream")
+        if content_type and not any(token in content_type for token in expected):
+            continue
+        published_raw = item.get("publicationTimestamp") or item.get("published") or item.get("lastModified") or item.get("date")
+        try:
+            published = _parse_time(published_raw)
+            size = int(item.get("size") or item.get("contentLength") or item.get("compressedSize") or 0)
+        except (ValueError, TypeError, OverflowError):
+            continue
+        if size < 0 or size > SAM_MAX_COMPRESSED_BYTES:
+            continue
+        url = _string(item.get("downloadUrl") or item.get("url") or item.get("href"))
+        if not url:
+            continue
+        valid.append((published, name, {**item, "file_name": name, "download_url": url,
+                                      "publication_timestamp": published.isoformat(), "compressed_size": size,
+                                      "content_type": content_type, "extension": extension}))
+    if not valid:
+        raise ValueError("listing contains no valid Exclusions/Public V2 ZIP or CSV artifact")
+    valid.sort(key=lambda entry: (entry[0], entry[1].casefold()), reverse=True)
+    return valid[0][2]
 
 
 class SamExclusionsAdapter:
-    """Built-in SAM.gov federal debarment adapter using the documented v4 production API."""
-
     query_mode = True
+    artifact_source = True
     always_parse = True
-    api_source = True
-    fail_fast_access_errors = True
-    canonical_start_url = SAM_EXCLUSIONS_ENDPOINT
+    canonical_start_url = SAM_DATA_SERVICES_ENDPOINT
     master_fields = SAM_MASTER_FIELDS
 
     def __init__(self):
-        self.contractors: dict[str, dict] = {}
-        self.term_contexts: dict[str, list[str]] = defaultdict(list)
-        self.matches: dict[str, dict[str, dict]] = defaultdict(dict)
-        self.ambiguous: dict[str, dict[str, dict]] = defaultdict(dict)
-        self.query_urls: dict[str, list[str]] = defaultdict(list)
-
-    def request_url(self, url: str) -> str:
-        key = get_sam_api_key()
-        if not key:
-            raise ValueError(
-                "SAM_API_KEY is not configured. Add the SAM.gov production API key "
-                "from the built-in Federal Debarment source."
-            )
-        parts = urlsplit(url)
-        query = parse_qs(parts.query, keep_blank_values=True)
-        query["api_key"] = [key]
-        pairs = [(name, value) for name, values in query.items() for value in values]
-        return parts._replace(query=urlencode(pairs)).geturl()
+        self.contractors = {}
+        self.matches = defaultdict(dict)
+        self.ambiguous = defaultdict(dict)
+        self.artifact_metadata = {}
+        self.extract_complete = False
+        self.incomplete_reason = "extract not retrieved"
 
     def seed_urls(self, master_rows: list[dict]) -> list[str]:
-        # Fail before any scan work if authentication has not been configured.
-        self.request_url(SAM_EXCLUSIONS_ENDPOINT)
-
-        self.contractors.clear()
-        self.term_contexts.clear()
-        self.matches.clear()
-        self.ambiguous.clear()
-        self.query_urls.clear()
-
-        urls: list[str] = []
+        self.contractors.clear(); self.matches.clear(); self.ambiguous.clear()
+        self.extract_complete = False; self.incomplete_reason = "extract not retrieved"
         for row in master_rows:
-            contractor_name = _string(row.get("contractor_name"))
-            if not contractor_name:
+            name = _string(row.get("contractor_name"))
+            if not name:
                 continue
-            key = _string(row.get("_master_id") or row.get("id") or normalize_match_text(contractor_name))
+            key = _string(row.get("_master_id") or row.get("id") or normalize_match_text(name))
             context = dict(row)
             aliases = contractor_aliases(row)
-            context["_sam_aliases"] = aliases
-            context["_sam_match_cores"] = sorted({company_core(alias) for alias in aliases if company_core(alias)})
+            context["_sam_names"] = {company_core(alias) for alias in aliases if company_core(alias)}
+            context["_sam_uei"] = normalize_match_text(_string(row.get("uei") or row.get("uei_sam")))
+            context["_sam_cage"] = normalize_match_text(_string(row.get("cage_code") or row.get("cage")))
             self.contractors[key] = context
-
-            seen_terms = set()
-            for alias in aliases:
-                core = company_core(alias)
-                term = core if core and (len(core) >= 6 or " " in core) else clean_search_term(alias)
-                term_key = normalize_match_text(term)
-                if not term_key or term_key in seen_terms:
-                    continue
-                seen_terms.add(term_key)
-                if key not in self.term_contexts[term_key]:
-                    self.term_contexts[term_key].append(key)
-                query_url = build_exclusions_query(term)
-                self.query_urls[key].append(query_url)
-                urls.append(query_url)
-        return list(dict.fromkeys(urls))
+        return [SAM_DATA_SERVICES_ENDPOINT] if self.contractors else []
 
     def allowed_url(self, url: str) -> bool:
         parts = urlsplit(url)
-        return (
-            (parts.hostname or "").lower() in {"api-alpha.sam.gov", "api.sam.gov"}
-            and parts.path.lower() == SAM_EXCLUSIONS_PATH.lower()
-        )
+        return parts.scheme == "https" and (parts.hostname or "").lower() in {"sam.gov", "www.sam.gov"}
 
-    def _contexts(self, url: str) -> list[str]:
-        return self.term_contexts.get(normalize_match_text(_query_term(url)), [])
+    @staticmethod
+    def _validated_download_url(value: str) -> str:
+        url = urljoin(SAM_DATA_SERVICES_ENDPOINT, value)
+        parts = urlsplit(url)
+        host = (parts.hostname or "").lower()
+        if parts.scheme != "https" or parts.username or parts.password or not (host == "sam.gov" or host.endswith(".sam.gov")):
+            raise ValueError("SAM manifest returned an unapproved download host")
+        return url
 
-    def _exact(self, entity_name: str, context_key: str) -> bool:
-        candidate = company_core(entity_name)
-        return bool(candidate and candidate in set(self.contractors[context_key].get("_sam_match_cores") or []))
-
-    def _plausible(self, entity_name: str, context_key: str) -> bool:
-        candidate = company_core(entity_name)
-        if len(candidate) < 6:
-            return False
-        for target in self.contractors[context_key].get("_sam_match_cores") or []:
-            if not target:
-                continue
-            if candidate in target or target in candidate:
-                return True
-            if SequenceMatcher(None, candidate, target).ratio() >= 0.86:
-                return True
-        return False
-
-    def _location_score(self, entity: dict, context_key: str) -> int:
-        source = _address(entity)
-        target = self.contractors[context_key]
-        score = 0
-        for source_field, master_field, weight in (
-            ("stateOrProvinceCode", "state", 4),
-            ("city", "city", 2),
-            ("zipCode", "zip", 3),
-            ("addressLine1", "address_1", 2),
-        ):
-            left = normalize_match_text(_string(source.get(source_field)))
-            right = normalize_match_text(_string(target.get(master_field)))
-            if master_field == "zip":
-                left, right = left[:5], right[:5]
-            if left and right and left == right:
-                score += weight
-        return score
-
-    def _choose_context(self, entity: dict, contexts: list[str]) -> str | None:
-        address = _address(entity)
-        candidate = {"address": address.get("addressLine1"), "city": address.get("city"), "state": address.get("stateOrProvinceCode"), "zip": address.get("zipCode")}
-        exact = [key for key in contexts if self._exact(_entity_name(entity), key) and location_corroborates(candidate, self.contractors[key])]
-        if len(exact) == 1:
-            return exact[0]
-        if len(exact) <= 1:
-            return None
-        scored = sorted(((self._location_score(entity, key), key) for key in exact), reverse=True)
-        if scored and scored[0][0] > 0 and (len(scored) == 1 or scored[0][0] > scored[1][0]):
-            return scored[0][1]
-        return None
-
-    def links(self, text: str, url: str) -> list[str]:
-        payload = _payload(text)
-        contexts = self._contexts(url)
-        for entity in payload["excludedEntity"]:
-            context_key = self._choose_context(entity, contexts)
-            key = _entity_key(entity)
-            normalized = _normalized_entity(entity)
-            normalized["search_url"] = url
-            if context_key and key:
-                self.matches[context_key][key] = normalized
-                continue
-            for candidate_key in contexts:
-                if self._plausible(_entity_name(entity), candidate_key):
-                    self.ambiguous[candidate_key][key or normalize_match_text(_entity_name(entity))] = {
-                        **normalized,
-                        "reason": "similar SAM.gov firm name requires identity review",
-                    }
-
-        total = payload.get("totalRecords")
+    async def acquire(self, client) -> None:
+        """Fetch listing and artifact, then atomically replace the validated cache."""
+        SAM_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        metadata_path, artifact_path = SAM_CACHE_DIR / "metadata.json", SAM_CACHE_DIR / "public-v2.zip"
+        old = {}
         try:
-            total_records = max(0, int(total or 0))
-        except (TypeError, ValueError):
-            total_records = len(payload["excludedEntity"])
-        page = _query_page(url)
-        size = _query_size(url)
-        if (page + 1) * size < min(total_records, 10000):
-            return [_with_page(url, page + 1)]
-        return []
+            old = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            pass
+        listing = await client.get(SAM_DATA_SERVICES_ENDPOINT, headers={"Accept": "application/json"})
+        if listing.status_code >= 400:
+            raise ValueError(f"SAM file listing HTTP {listing.status_code}")
+        artifact = select_manifest_artifact(listing.content)
+        download_url = self._validated_download_url(artifact["download_url"])
+        headers = {}
+        if old.get("download_url") == download_url:
+            if old.get("etag"): headers["If-None-Match"] = old["etag"]
+            if old.get("last_modified"): headers["If-Modified-Since"] = old["last_modified"]
+        response = await client.get(download_url, headers=headers, follow_redirects=False)
+        for _ in range(5):
+            if response.status_code not in {301, 302, 303, 307, 308}:
+                break
+            download_url = self._validated_download_url(response.headers.get("location", ""))
+            response = await client.get(download_url, headers=headers, follow_redirects=False)
+        if response.status_code == 304:
+            if not artifact_path.is_file() or not old.get("sha256"):
+                raise ValueError("SAM returned 304 without a validated cached artifact")
+            actual = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+            if actual != old["sha256"]:
+                raise ValueError("cached SAM artifact failed integrity validation")
+            age = (datetime.now(timezone.utc) - _parse_time(old["retrieved_at"])).total_seconds()
+            self.artifact_metadata = {**old, "retained_artifact_age_seconds": max(0, int(age)), "cache_reused": True}
+            if age > SAM_CACHE_MAX_AGE_SECONDS:
+                self.incomplete_reason = "cached SAM artifact is stale and was not used"
+                raise ValueError(self.incomplete_reason)
+            self.process_artifact(artifact_path, self.artifact_metadata)
+            return
+        if response.status_code != 200:
+            age = None
+            if old.get("retrieved_at"):
+                age = max(0, int((datetime.now(timezone.utc) - _parse_time(old["retrieved_at"])).total_seconds()))
+            self.artifact_metadata = {**old, "retained_artifact_age_seconds": age}
+            self.incomplete_reason = f"artifact refresh failed with HTTP {response.status_code}; retained artifact was not used"
+            raise ValueError(self.incomplete_reason)
+        body = response.content
+        declared = response.headers.get("content-length")
+        if declared and int(declared) > SAM_MAX_COMPRESSED_BYTES or len(body) > SAM_MAX_COMPRESSED_BYTES:
+            raise ValueError("SAM artifact exceeds the compressed-size limit")
+        kind = response.headers.get("content-type", "").lower()
+        if artifact["extension"] == ".zip" and kind and not any(x in kind for x in ("zip", "octet-stream")):
+            raise ValueError("SAM artifact has an unexpected content type")
+        fd, temporary = tempfile.mkstemp(prefix=".sam-download-", suffix=artifact["extension"], dir=SAM_CACHE_DIR)
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(body); handle.flush(); os.fsync(handle.fileno())
+            temp_path = Path(temporary)
+            metadata = {**artifact, "download_url": download_url, "etag": response.headers.get("etag", ""),
+                "last_modified": response.headers.get("last-modified", ""), "compressed_size": len(body),
+                "sha256": hashlib.sha256(body).hexdigest(), "schema_version": "Public V2",
+                "retrieved_at": datetime.now(timezone.utc).isoformat(), "cache_reused": False}
+            # Parsing is validation: bad input never replaces the last known-good file.
+            self.process_artifact(temp_path, metadata)
+            os.replace(temp_path, artifact_path)
+            meta_temp = metadata_path.with_suffix(".json.tmp")
+            meta_temp.write_text(json.dumps(metadata, sort_keys=True, indent=2), encoding="utf-8")
+            os.replace(meta_temp, metadata_path)
+        finally:
+            try: Path(temporary).unlink()
+            except FileNotFoundError: pass
 
-    def extract(self, text: str, url: str) -> list[dict]:
-        # Search pages are accumulated and emitted as one contractor-level record
-        # during finalization so the combined state/federal bidder field is never
-        # rewritten once per exclusion row.
-        return []
+    @staticmethod
+    def _location(row):
+        return {"address": row.get("address_1"), "city": row.get("city"), "state": row.get("state"), "zip": row.get("zip")}
+
+    def consume_rows(self, rows):
+        uei_index, cage_index, name_index = defaultdict(list), defaultdict(list), defaultdict(list)
+        for key, master in self.contractors.items():
+            if master["_sam_uei"]: uei_index[master["_sam_uei"]].append(key)
+            if master["_sam_cage"]: cage_index[master["_sam_cage"]].append(key)
+            for name in master["_sam_names"]: name_index[name].append(key)
+        for row in rows:
+            if not row.get("active"):
+                continue
+            identifier = _string(row.get("exclusion_identifier"))
+            if not identifier:
+                raise SamExtractError("SAM row has no official exclusion identifier")
+            uei, cage = normalize_match_text(row.get("uei", "")), normalize_match_text(row.get("cage_code", ""))
+            name = company_core(row.get("entity_name", ""))
+            is_firm = normalize_match_text(row.get("classification", "")) in {"firm", "entity", "organization"}
+            candidates, basis = [], ""
+            if uei and uei in uei_index: candidates, basis = uei_index[uei], "exact UEI"
+            elif cage and cage in cage_index: candidates, basis = cage_index[cage], "exact CAGE"
+            elif is_firm and name in name_index:
+                candidates = [key for key in name_index[name] if location_corroborates(self._location(row), self.contractors[key])]
+                basis = "exact approved name/alias plus location"
+            if len(candidates) == 1:
+                self.matches[candidates[0]][identifier] = {**row, "matching_basis": basis}
+                continue
+            plausible = set(candidates)
+            if not plausible and name and is_firm:
+                for target, keys in name_index.items():
+                    if name == target or (len(name) >= 6 and SequenceMatcher(None, name, target).ratio() >= .86):
+                        plausible.update(keys)
+            for key in plausible:
+                self.ambiguous[key][identifier] = {**row, "reason": "shared identifier, multiple master match, or name/location conflict"}
+
+    def process_artifact(self, path: Path, metadata: dict):
+        if metadata.get("extension") == ".csv":
+            raise SamExtractError("direct CSV artifacts are not enabled until their transport encoding is fixture-validated")
+        self.artifact_metadata = metadata
+        self.consume_rows(iter_public_v2_rows(path, max_uncompressed=SAM_MAX_UNCOMPRESSED_BYTES, artifact=metadata))
+        self.extract_complete = True
+        self.incomplete_reason = ""
+
+    def extract(self, text, url): return []
+    def links(self, text, url): return []
 
     def finalize_records(self, complete: bool) -> list[dict]:
-        records: list[dict] = []
+        complete = bool(complete and self.extract_complete)
+        records = []
         for key, contractor in self.contractors.items():
-            matches = list(self.matches.get(key, {}).values())
-            ambiguous = list(self.ambiguous.get(key, {}).values())
-
-            contractor_name = _string(contractor.get("contractor_name"))
-            bidder_id = _string(contractor.get("id"))
-            if matches:
-                narrative = (
-                    f"SAM.gov returned {len(matches)} active federal exclusion record(s) "
-                    "that exactly matched the bidder or a listed related company."
-                )
-            elif ambiguous:
-                narrative = (
-                    f"SAM.gov returned {len(ambiguous)} similar active firm exclusion result(s) "
-                    "that require manual identity review."
-                )
-            elif not complete:
-                narrative = "UNKNOWN / INCOMPLETE: SAM lookup did not finish."
-            else:
-                narrative = (
-                    "No exact active federal exclusion match was found in the completed SAM.gov "
-                    "production API queries. The combined state/federal master field remains "
-                    "unchanged because state debarment still requires separate research."
-                )
-
-            # Production SAM proves a positive federal exclusion. It cannot by itself
-            # prove the combined state_federal_debarment field is negative.
-            combined_value = "Y" if matches else ""
-            latest = ""
-            for match in matches:
-                for action in match.get("actions") or []:
-                    latest = max(latest, action.get("update_date") or action.get("activate_date") or "")
-
-            source_url = (self.query_urls.get(key) or [SAM_EXCLUSIONS_ENDPOINT])[-1]
+            matches = list(self.matches[key].values())
+            ambiguous = list(self.ambiguous[key].values())
+            name = _string(contractor.get("contractor_name")); bidder_id = _string(contractor.get("id"))
             records.append({
-                "external_id": f"sam:bidder:{bidder_id or normalize_match_text(contractor_name)}",
-                "company": contractor_name,
-                "bidder_id": bidder_id,
-                "date": latest,
-                "source_url": source_url,
-                "state_federal_debarment": combined_value,
-                "extra": {
-                    "master_id": contractor.get("_master_id"),
-                    "environment": "production",
-                    "source_system": "SAM.gov Exclusions API v4 Production",
-                    "api_endpoint": SAM_EXCLUSIONS_ENDPOINT,
-                    "api_fields_written_to_master": list(SAM_MASTER_FIELDS),
-                    "federal_component_only": True,
-                    "negative_result_writes_combined_field": False,
-                    "search_terms": contractor.get("_sam_aliases") or [],
-                    "query_count": len(self.query_urls.get(key) or []),
-                    "complete_aggregate": bool(complete),
-                    "active_federal_exclusions": matches,
-                    "ambiguous_candidates": ambiguous,
-                    "narrative": narrative,
-                    "public_review_url": SAM_PUBLIC_SEARCH,
-                },
-            })
+                "external_id": f"sam:bidder:{bidder_id or normalize_match_text(name)}", "company": name,
+                "bidder_id": bidder_id, "date": max([_string(m.get("activation_date")) for m in matches] or [""]),
+                "source_url": SAM_PUBLIC_SEARCH, "state_federal_debarment": "Y" if matches else "",
+                "extra": {"master_id": contractor.get("_master_id"), "source_system": "SAM.gov Exclusions Public V2 daily extract",
+                    "federal_component_only": True, "negative_result_writes_combined_field": False,
+                    "complete_aggregate": complete, "incomplete_reason": "" if complete else self.incomplete_reason or "crawl incomplete",
+                    "artifact": self.artifact_metadata, "active_federal_exclusions": matches,
+                    "confirmed_exclusions": matches, "ambiguous_candidates": ambiguous, "public_review_url": SAM_PUBLIC_SEARCH,
+                    "narrative": (f"Confirmed {len(matches)} active federal exclusion(s)." if matches else
+                        "Completed federal extract scan; the combined state/federal field remains unchanged." if complete else
+                        "UNKNOWN / INCOMPLETE: the federal extract could not be fully validated.")}}
+            )
         return records
