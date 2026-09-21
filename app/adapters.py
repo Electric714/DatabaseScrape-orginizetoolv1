@@ -39,6 +39,8 @@ ADAPTERS: dict[str, type[GenericAdapter]] = {
     "api.dol.gov": OshaEstablishmentAdapter,
     "api-alpha.sam.gov": SamExclusionsAdapter,
     "api.sam.gov": SamExclusionsAdapter,
+    "sam.gov": SamExclusionsAdapter,
+    "www.sam.gov": SamExclusionsAdapter,
     "violationtracker.goodjobsfirst.org": ViolationTrackerAdapter,
     "mn.gov": MinnesotaDebarmentAdapter,
     "labor.illinois.gov": IllinoisDebarmentAdapter,

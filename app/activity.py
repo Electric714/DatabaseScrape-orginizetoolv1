@@ -12,6 +12,31 @@ from .diagnostics import redact, sanitize
 
 APP_VERSION = "0.6.0"
 
+def redact(value):
+    def safe_url(match):
+        try:
+            url = urlsplit(match[0])
+            return urlunsplit((url.scheme, url.hostname or "", url.path, "", ""))
+        except ValueError:
+            return "[invalid URL]"
+    text = URL.sub(safe_url, str(value))
+    text = re.sub(r"(?i)(authorization\s*[:=]\s*)(?:Bearer|Basic)\s+\S+", r"\1[redacted]", text)
+    text = SECRET.sub(r"\1\2[redacted]", text)
+    text = re.sub(r"(?i)[A-Z]:\\Users\\[^\\\s]+", r"C:\\Users\\[user]", text)
+    text = re.sub(r"/(?:home|Users)/[^/\s]+", "/home/[user]", text)
+    return text[:12000]
+
+
+def sanitize_mapping(value):
+    """Recursively apply the storage/API/export redaction boundary."""
+    if isinstance(value, dict):
+        return {str(k): "[redacted]" if re.search(r"(?i)token|secret|password|cookie|authorization|api[_-]?key", str(k))
+                else sanitize_mapping(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [sanitize_mapping(v) for v in value]
+    if isinstance(value, tuple):
+        return [sanitize_mapping(v) for v in value]
+    return redact(value) if isinstance(value, str) else value
 
 
 class ActivityHandler(logging.Handler):
@@ -20,7 +45,7 @@ class ActivityHandler(logging.Handler):
         if record.exc_info:
             message += "\n" + "".join(traceback.format_exception(*record.exc_info))
         details = getattr(record, "details", {})
-        clean = sanitize(details)
+        clean = sanitize_mapping(details)
         future = db._EXECUTOR.submit(db._sync_add_event, record.levelname, record.name,
             redact(message), clean, getattr(record, "job_id", None), getattr(record, "source_id", None))
         def completed(result):
@@ -45,7 +70,7 @@ def emit(level, message, *, job_id=None, source_id=None, **details):
 
 
 async def bundle():
-    events = await db.list_events(limit=5000)
+    events = sanitize_mapping(await db.list_events(limit=5000))
     jobs = await db.list_jobs(limit=30)
     summary = {
         "application": "Paralegal Database Tool", "version": APP_VERSION,

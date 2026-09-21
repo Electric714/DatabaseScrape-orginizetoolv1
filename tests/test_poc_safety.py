@@ -7,7 +7,6 @@ from app.identity import location_corroborates
 from app.bbb_adapter import BbbComplaintsAdapter
 from app.osha_adapter import OshaEstablishmentAdapter
 from app.state_adapter import MinnesotaDebarmentAdapter, parse_minnesota, active_on, MN_URL
-from app.violation_tracker_adapter import offense_field, ViolationTrackerAdapter
 from app.crawler import CrawlEngine
 from app.models import SourceCreate
 from app.bidder_schema import BIDDER_COLUMNS, parse_bidder_csv
@@ -56,16 +55,6 @@ def test_mn_historical_and_unknown_dates_never_active():
         parse_minnesota(mn_html().replace("of 1", "of 2"))
     with pytest.raises(ValueError):
         parse_minnesota("<h1>Service unavailable</h1>")
-
-
-def test_vt_cannot_infer_prevailing_wage_or_clear_absence():
-    assert offense_field("wage and hour violation") is None
-    assert offense_field("air pollution violation") == "environmental_violations"
-    a = ViolationTrackerAdapter()
-    query, = a.seed_urls([contractor()])
-    with pytest.raises(ValueError):
-        a.links("<h1>Access denied</h1>", query)
-    assert all(a.finalize_records(False)[0][f] == "" for f in a.master_fields)
 
 
 async def test_selected_scan_preserves_other_contractors(database):

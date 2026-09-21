@@ -7,6 +7,7 @@ import pytest
 
 from app import backup, bidder_master as bm, database as db
 from app.crawler import CrawlEngine
+from app.errors import SourceAcquisitionError
 from app.bidder_schema import BIDDER_COLUMNS
 
 
@@ -81,6 +82,23 @@ async def test_non_retryable_403_is_not_retried(database, source, monkeypatch):
     assert result.status == 403
     assert calls == 1
     assert (await db.get_job(job_id))["retry_count"] == 0
+
+
+async def test_structured_profile_403_has_safe_source_context(database, source):
+    job_id = await db.create_job(source["id"], False)
+    engine = CrawlEngine(source, job_id)
+    failure = engine._failure(Exception("HTTP 403 secret-body-must-not-be-copied"), "profile",
+                              "https://fixture.test/profile/acme?token=hidden", "access_block", False, status=403)
+    assert isinstance(failure, SourceAcquisitionError)
+    assert failure.upstream_status == 403
+    assert failure.stage == "profile"
+    assert failure.logical_url == "https://fixture.test/profile/acme"
+    await engine._record_failure(failure)
+    diagnostic = (await db.job_diagnostics(job_id))[-1]
+    assert diagnostic["source_name"] == source["name"]
+    assert diagnostic["details"]["acquisition_mode"] == "http"
+    assert "token=hidden" not in json.dumps(diagnostic)
+    await engine.renderer.close()
 
 
 async def test_exhausted_transient_retries_are_durable(database, source, monkeypatch):

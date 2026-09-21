@@ -506,6 +506,8 @@ def _sync_record_job_diagnostic(job_id: int, level: str, category: str, message:
                                 source_id: int | None = None, url: str | None = None,
                                 retryable: bool = False, attempt_no: int | None = None,
                                 details: dict[str, Any] | None = None) -> int:
+    from .activity import redact, sanitize_mapping
+    message, url, details = redact(message), redact(url) if url else None, sanitize_mapping(details or {})
     with closing(connect()) as conn:
         if source_id is None:
             row = conn.execute("SELECT source_id FROM crawl_jobs WHERE id=?", (job_id,)).fetchone()
@@ -514,15 +516,16 @@ def _sync_record_job_diagnostic(job_id: int, level: str, category: str, message:
             """INSERT INTO crawl_job_diagnostics
                (job_id,source_id,created_at,level,category,message,url,retryable,attempt_no,details_json)
                VALUES (?,?,?,?,?,?,?,?,?,?)""",
-            (job_id, source_id, utcnow(), level, redact(category)[:120], redact(message)[:4000],
-             redact(url) if url else None, int(retryable), attempt_no,
-             json.dumps(sanitize(details or {}), ensure_ascii=False, sort_keys=True, default=str)),
+            (job_id, source_id, utcnow(), level, category, str(message)[:4000], url, int(retryable), attempt_no,
+             json.dumps(details, ensure_ascii=False, sort_keys=True, default=str)),
         )
         conn.commit()
         return int(cur.lastrowid)
 
 
 def _sync_record_retry(job_id: int, url: str, attempt_no: int, reason: str, *, source_id: int | None = None) -> None:
+    from .activity import redact
+    url, reason = redact(url), redact(reason)
     with closing(connect()) as conn:
         conn.execute("BEGIN IMMEDIATE")
         conn.execute("UPDATE crawl_jobs SET retry_count=retry_count+1,heartbeat_at=? WHERE id=?", (utcnow(), job_id))
@@ -621,7 +624,9 @@ def _sync_frontier_summary(job_id: int) -> dict[str, Any]:
 def _sync_job_diagnostics(job_id: int, limit: int = 1000) -> list[dict[str, Any]]:
     with closing(connect()) as conn:
         rows = conn.execute(
-            "SELECT * FROM crawl_job_diagnostics WHERE job_id=? ORDER BY id LIMIT ?", (job_id, limit)
+            """SELECT d.*, COALESCE(s.name, 'Unknown source') source_name
+               FROM crawl_job_diagnostics d LEFT JOIN sources s ON s.id=d.source_id
+               WHERE d.job_id=? ORDER BY d.id LIMIT ?""", (job_id, limit)
         ).fetchall()
         items = []
         for row in rows:
@@ -654,16 +659,33 @@ def _sync_get_job(job_id: int) -> dict[str, Any] | None:
             "SELECT j.*, s.name AS source_name FROM crawl_jobs j JOIN sources s ON s.id=j.source_id WHERE j.id=?",
             (job_id,),
         ).fetchone()
-        return dict(row) if row else None
+        if not row:
+            return None
+        item = dict(row)
+        failure = conn.execute(
+            "SELECT details_json FROM crawl_job_diagnostics WHERE job_id=? AND level='ERROR' ORDER BY id LIMIT 1",
+            (job_id,),
+        ).fetchone()
+        item["failure"] = json.loads(failure[0]) if failure else None
+        return item
 
 
 def _sync_list_jobs(limit: int = 30) -> list[dict[str, Any]]:
     with closing(connect()) as conn:
         rows = conn.execute(
-            "SELECT j.*, s.name AS source_name FROM crawl_jobs j JOIN sources s ON s.id=j.source_id ORDER BY j.id DESC LIMIT ?",
+            """SELECT j.*, s.name AS source_name,
+               (SELECT d.details_json FROM crawl_job_diagnostics d
+                WHERE d.job_id=j.id AND d.level='ERROR' ORDER BY d.id LIMIT 1) AS failure_json
+               FROM crawl_jobs j JOIN sources s ON s.id=j.source_id ORDER BY j.id DESC LIMIT ?""",
             (limit,),
         ).fetchall()
-        return [dict(r) for r in rows]
+        items = []
+        for row in rows:
+            item = dict(row)
+            raw = item.pop("failure_json", None)
+            item["failure"] = json.loads(raw) if raw else None
+            items.append(item)
+        return items
 
 
 def _sync_running_job_for_source(source_id: int) -> dict[str, Any] | None:
