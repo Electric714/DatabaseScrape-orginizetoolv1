@@ -1,0 +1,166 @@
+name: SAM audit one-off patch
+
+on:
+  push:
+    branches:
+      - fix/sam-exclusions-audit-matching
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/sam-exclusions-audit-matching
+      - name: Apply audited compatibility and UI cleanup
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          def replace(path, old, new, count=1):
+              p = Path(path)
+              text = p.read_text(encoding="utf-8")
+              actual = text.count(old)
+              if actual != count:
+                  raise SystemExit(f"{path}: expected {count} occurrence(s), found {actual}: {old[:80]!r}")
+              p.write_text(text.replace(old, new), encoding="utf-8")
+
+          # A prior merge retained typed acquisition code but dropped its imports,
+          # which made the entire test suite fail during module import.
+          replace(
+              "app/crawler.py",
+              "from .errors import SourceAcquisitionError\n",
+              "from .errors import SourceAcquisitionError\nfrom .diagnostics import (\n    AcquisitionFailure, AcquisitionStage, AcquisitionStatus, RetryClass,\n    classify_failure,\n)\n",
+          )
+
+          # SAM Public V2 no longer uses an API key. Remove the stale source-card
+          # control and dead click path that were reintroduced by a later UI merge.
+          replace(
+              "app/static/app.js",
+              "    const builtInKeyButton = isOshaSource(source) ? '<button class=\"settings-button\" type=\"button\" data-dol-key>Set API key</button>' : isSamSource(source) ? '<button class=\"settings-button\" type=\"button\" data-sam-key>Set API key</button>' : '';\n",
+              "    const builtInKeyButton = isOshaSource(source) ? '<button class=\"settings-button\" type=\"button\" data-dol-key>Set API key</button>' : '';\n",
+          )
+          replace(
+              "app/static/app.js",
+              "    if (button.hasAttribute('data-sam-key')) { openSamKeyDialog(button); return; }\n",
+              "",
+          )
+
+          # Remove obsolete SAM-key settings markup. The source card remains and
+          # correctly describes the no-credential daily Public V2 artifact.
+          index = Path("app/static/index.html")
+          html = index.read_text(encoding="utf-8")
+          before = html
+          html, button_count = re.subn(
+              r'\s*<button[^>]*id="samApiKeyButton"[^>]*>.*?</button>',
+              "",
+              html,
+              flags=re.S,
+          )
+          html, dialog_count = re.subn(
+              r'\s*<dialog[^>]*id="samKeyDialog"[^>]*>.*?</dialog>',
+              "",
+              html,
+              flags=re.S,
+          )
+          if button_count != 1 or dialog_count != 1:
+              raise SystemExit(f"index.html: expected one SAM key button/dialog, got {button_count}/{dialog_count}")
+          if html == before:
+              raise SystemExit("index.html: no SAM key cleanup applied")
+          index.write_text(html, encoding="utf-8")
+
+          # Browser tests must reflect that SAM is credential-free and collectable
+          # without the DOL key used by the separate OSHA integration.
+          browser = Path("tests/test_browser.py")
+          text = browser.read_text(encoding="utf-8")
+          text, n1 = re.subn(r'^\s*monkeypatch\.setattr\(main, "sam_api_key_configured", lambda: False\)\n', '', text, flags=re.M)
+          text, n2 = re.subn(r'^\s*expect\(page\.locator\("#samApiKeyButton"\)\)\.to_have_text\("Set SAM API key"\)\n', '', text, flags=re.M)
+          text, n3 = re.subn(r'^\s*page\.locator\("#samApiKeyButton"\)\.click\(\)\n', '', text, flags=re.M)
+          text, n4 = re.subn(r'^\s*expect\(page\.locator\("#samKeyDialog"\)\)\.to_be_visible\(\)\n', '', text, flags=re.M)
+          text, n5 = re.subn(r'^\s*page\.locator\("#samKeyDialog \[data-close=\'samKeyDialog\'\]"\)\.last\.click\(\)\n', '', text, flags=re.M)
+          old = 'expect(page.get_by_role("button", name="Collect federal debarment", exact=True)).to_be_disabled()'
+          if old not in text:
+              raise SystemExit("tests/test_browser.py: stale SAM collect assertion not found")
+          text = text.replace(old, 'expect(page.get_by_role("button", name="Collect federal debarment", exact=True)).to_be_enabled()', 1)
+          if (n1, n2, n3, n4, n5) != (1, 1, 1, 1, 1):
+              raise SystemExit(f"tests/test_browser.py cleanup counts: {(n1, n2, n3, n4, n5)}")
+          browser.write_text(text, encoding="utf-8")
+
+          ui_test = Path("tests/test_frontend_workflow_ui.py")
+          text = ui_test.read_text(encoding="utf-8")
+          text, count = re.subn(r'^\s*monkeypatch\.setattr\(main, "sam_api_key_configured", lambda: False\)\n', '', text, flags=re.M)
+          if count != 1:
+              raise SystemExit(f"tests/test_frontend_workflow_ui.py: expected 1 stale SAM key monkeypatch, got {count}")
+          ui_test.write_text(text, encoding="utf-8")
+
+          # Replace the operator-facing obsolete API-key section with the actual
+          # daily extract workflow.
+          start = Path("0 - START HERE.txt")
+          text = start.read_text(encoding="utf-8")
+          pattern = re.compile(
+              r'SAM\.GOV FEDERAL DEBARMENT API KEY\n.*?A clean SAM result does not write N because state debarment is checked separately\.\n',
+              re.S,
+          )
+          replacement = (
+              "SAM.GOV FEDERAL DEBARMENT / EXCLUSIONS\n"
+              "SAM uses the credential-free daily Exclusions / Public V2 data extract.\n"
+              "No SAM API key is required. Click Collect federal debarment after the\n"
+              "master CSV is loaded. The app validates and caches the current official\n"
+              "CSV/ZIP artifact, then compares only the approved master contractors.\n\n"
+              "A confirmed active federal exclusion can propose state_federal_debarment = Y.\n"
+              "No match never writes N, and uncertain identity remains manual-review evidence.\n"
+          )
+          text, count = pattern.subn(replacement, text)
+          if count != 1:
+              raise SystemExit(f"0 - START HERE.txt: expected 1 obsolete SAM section, got {count}")
+          start.write_text(text, encoding="utf-8")
+
+          # README had mixed old API text and new extract text after merge conflict.
+          readme = Path("README.md")
+          text = readme.read_text(encoding="utf-8")
+          text = text.replace(
+              "## SAM.gov Federal Debarment / Exclusions API — Source 2",
+              "## SAM.gov Federal Debarment / Exclusions Public V2 — Source 2",
+              1,
+          )
+          old_block = re.compile(
+              r'SAM\.gov Federal Debarment is a built-in integration using the official \*\*v4 production Exclusions API\*\* documented by GSA:.*?SAM federal exclusions use the credential-free daily \*\*Exclusions / Public V2\*\* artifact\.',
+              re.S,
+          )
+          new_block = (
+              "SAM.gov Federal Debarment is a built-in integration using the official credential-free "
+              "daily **Exclusions / Public V2** artifact. The application obtains the current SAM Data "
+              "Services artifact once, validates it, and compares the approved master contractors locally."
+          )
+          text, count = old_block.subn(new_block, text)
+          if count != 1:
+              raise SystemExit(f"README.md: expected 1 mixed SAM API/extract block, got {count}")
+          text, count2 = re.subn(
+              r'\nBecause SAM requires the credential in the query string,.*?outbound network request\.\n',
+              "\n",
+              text,
+              count=1,
+              flags=re.S,
+          )
+          text, count3 = re.subn(
+              r'\nThe production endpoint is used for live public exclusion checks\. Exact active federal matches may propose `Y`; absence never clears the combined state/federal field\.\n',
+              "\n",
+              text,
+              count=1,
+          )
+          if count2 != 1 or count3 != 1:
+              raise SystemExit(f"README.md: stale credential/endpoint paragraphs cleanup counts {count2}/{count3}")
+          readme.write_text(text, encoding="utf-8")
+
+      - name: Commit audited cleanup
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/crawler.py app/static/app.js app/static/index.html tests/test_browser.py tests/test_frontend_workflow_ui.py "0 - START HERE.txt" README.md
+          git diff --cached --check
+          git commit -m "Complete SAM Public V2 audit cleanup [skip ci]"
+          git push origin HEAD:fix/sam-exclusions-audit-matching
