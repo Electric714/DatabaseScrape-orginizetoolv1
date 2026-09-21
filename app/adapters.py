@@ -4,7 +4,7 @@ from urllib.parse import urlsplit
 from .extractor import discover_links, extract_records
 from .osha_adapter import OshaEstablishmentAdapter
 from .sam_adapter import SamExclusionsAdapter
-from .bbb_sitemap_adapter import BbbSitemapComplaintsAdapter
+from .bbb_targeted_adapter import BbbTargetedProfileAdapter
 from .state_adapter import MinnesotaDebarmentAdapter
 from .state_sources import IllinoisDebarmentAdapter, WisconsinDebarmentAdapter
 from .violation_tracker_adapter import ViolationTrackerAdapter
@@ -46,8 +46,8 @@ ADAPTERS: dict[str, type[GenericAdapter]] = {
     "labor.illinois.gov": IllinoisDebarmentAdapter,
     "wisconsindot.gov": WisconsinDebarmentAdapter,
     "www.wisconsindot.gov": WisconsinDebarmentAdapter,
-    "www.bbb.org": BbbSitemapComplaintsAdapter,
-    "bbb.org": BbbSitemapComplaintsAdapter,
+    "www.bbb.org": BbbTargetedProfileAdapter,
+    "bbb.org": BbbTargetedProfileAdapter,
 }
 
 
