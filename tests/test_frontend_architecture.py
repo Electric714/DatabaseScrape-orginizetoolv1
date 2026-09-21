@@ -13,7 +13,11 @@ def test_frontend_is_one_direct_implementation():
 
     assert "ui-shell.js" not in html
     assert "research-desk.css" not in html
-    assert html.count('<link rel="stylesheet"') == 1
+    # The consolidated UI intentionally has one base stylesheet plus the
+    # professional presentation layer; there are no obsolete parallel shells.
+    assert html.count('href="/static/styles.css"') == 1
+    assert html.count('href="/static/professional.css"') == 1
+    assert html.count('<link rel="stylesheet"') == 2
     assert html.count('<script src=') == 1
 
     expected_views = {
@@ -42,9 +46,13 @@ def test_workflow_guardrails_are_explicit_in_ui():
     html = read("index.html")
     javascript = read("app.js")
 
-    assert "APPROVED MASTER DATA" in html
-    assert "Evidence is not approved data" in html
-    assert "No research-created contractors" in html
+    # Assert the current operator-facing safeguards semantically rather than
+    # requiring retired pre-cleanup headings.
+    assert "MASTER DATABASE" in html
+    assert "Research evidence:" in html
+    assert "outside-source records remain separate until reviewed" in html
+    assert "research does not create new master contractors" in html
+    assert "failed or partial research does not create a clean finding" in html
     assert 'data-review-mode="identity"' in html
     assert 'data-review-mode="resolved"' in html
     assert 'id="evidencePrevPage"' in html
