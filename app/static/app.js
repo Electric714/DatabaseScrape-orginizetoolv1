@@ -581,13 +581,21 @@ function renderDashboardProblems() {
   $('dashboardProblems').innerHTML = problems.length ? problems.slice(0,5).map(job => `<div class="compact-item"><strong>${esc(job.source_name || 'Research job')}</strong><span class="tag ${esc(String(job.status).toLowerCase())}">${esc(job.status)}</span><small>${esc(job.message || 'No diagnostic message supplied')} · ${esc(humanDate(job.started_at))}</small></div>`).join('') : '<div class="empty-state">No recent partial or failed research jobs.</div>';
 }
 
+function failureSummary(job) {
+  const failure = job.failure || {};
+  if (!failure.stage && !failure.category) return '';
+  const retry = failure.retryable ? `retryable; attempt ${failure.attempt_no || '?'}` : 'not retryable';
+  const status = failure.upstream_status ? `HTTP ${failure.upstream_status}` : 'no HTTP status';
+  return `${failure.source_name || job.source_name || 'Research source'} · ${failure.stage || 'unknown stage'} · ${status} · ${failure.category || 'internal_error'} · ${retry} · ${failure.message || 'Collection failed'}`;
+}
+
 async function loadJobs() {
   const jobs = await api('/api/jobs?limit=20');
   state.jobs = jobs;
   const running = jobs.filter(job => ['queued','running'].includes(String(job.status || '').toLowerCase())).length;
   $('dashRunningCount').textContent = running.toLocaleString();
   renderDashboardProblems();
-  $('jobs').innerHTML = jobs.length ? jobs.map(job => `<article class="job"><div class="job-head"><strong>${esc(job.source_name || 'Research source')}</strong><span class="tag ${esc(String(job.status || '').toLowerCase())}">${esc(job.status || 'unknown')}</span></div><span class="job-time">${esc(humanDate(job.started_at))}</span><p class="job-message">${esc(job.message || 'No status message supplied.')}</p><div class="job-stats"><span><b>${job.pages_processed ?? 0}/${job.pages_discovered ?? 0}</b> pages</span><span><b>${job.records_found ?? 0}</b> found</span><span><b>${job.records_new ?? 0}</b> new</span><span><b>${job.records_updated ?? 0}</b> updated</span><span><b>${job.errors ?? 0}</b> errors</span></div></article>`).join('') : '<div class="empty-state">No research jobs have run yet.</div>';
+  $('jobs').innerHTML = jobs.length ? jobs.map(job => `<article class="job"><div class="job-head"><strong>${esc(job.source_name || 'Research source')}</strong><span class="tag ${esc(String(job.status || '').toLowerCase())}">${esc(job.status || 'unknown')}</span></div><span class="job-time">${esc(humanDate(job.started_at))}</span><p class="job-message">${esc(failureSummary(job) || job.message || 'No status message supplied.')}</p><div class="job-stats"><span><b>${job.pages_processed ?? 0}/${job.pages_discovered ?? 0}</b> pages</span><span><b>${job.records_found ?? 0}</b> found</span><span><b>${job.records_new ?? 0}</b> new</span><span><b>${job.records_updated ?? 0}</b> updated</span><span><b>${job.errors ?? 0}</b> errors</span></div></article>`).join('') : '<div class="empty-state">No research jobs have run yet.</div>';
   if (document.body.dataset.activeView === 'research' && running) $('deskResearchStatus').textContent = `${running} research job${running === 1 ? '' : 's'} currently running. Evidence remains separate until comparison review.`;
 }
 
